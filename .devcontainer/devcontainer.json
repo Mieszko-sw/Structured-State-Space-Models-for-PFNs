@@ -1,0 +1,9 @@
+{
+  "name": "SSM-PFN",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/app",
+  "runArgs": ["--gpus", "all"]
+}

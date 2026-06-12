@@ -179,9 +179,10 @@ def torch_masked_mean(x, mask, dim=0, return_share_of_ignored_values=False):
     """
     num = torch.where(mask, torch.full_like(x, 1), torch.full_like(x, 0)).sum(dim=dim)
     value = torch.where(mask, x, torch.full_like(x, 0)).sum(dim=dim)
+    safe_num = num.clamp_min(1)
     if return_share_of_ignored_values:
-        return value / num, 1.-num/x.shape[dim]
-    return value / num
+        return value / safe_num, 1.-num/x.shape[dim]
+    return value / safe_num
 
 def torch_masked_std(x, mask, dim=0):
     """

@@ -14,3 +14,4 @@ hyperopt==0.2.5
 configspace==0.4.21
 lightgbm==4.6.0
 # autogluon==0.4.0
+

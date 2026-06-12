@@ -8,6 +8,8 @@ from collections import Counter
 from tabpfn.datasets import load_openml_list
 import openml
 import torch
+import os
+import time
 
 class EvalHelper:
 
@@ -30,11 +32,34 @@ class EvalHelper:
 
     def check_datasets_data(self, dids):
 
-        data_keys = list(self.datasets_data.keys())
+        max_attempts = int(os.environ.get("OPENML_DATASET_RETRIES", "5"))
+        base_sleep_seconds = float(os.environ.get("OPENML_RETRY_SLEEP_SECONDS", "10"))
 
         for did in dids:
-            if not (did in data_keys):
-                self.datasets_data[did] = load_openml_list([did], num_feats=99999, max_samples=999999, max_num_classes=999)[0]
+            if did in self.datasets_data:
+                continue
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    self.datasets_data[did] = load_openml_list(
+                        [did],
+                        num_feats=99999,
+                        max_samples=999999,
+                        max_num_classes=999,
+                    )[0]
+                    break
+                except Exception as exc:
+                    if attempt == max_attempts:
+                        raise
+
+                    sleep_seconds = base_sleep_seconds * attempt
+                    print(
+                        f"OpenML dataset {did} failed to load on attempt "
+                        f"{attempt}/{max_attempts}: {exc}. "
+                        f"Retrying in {sleep_seconds:.0f}s.",
+                        flush=True,
+                    )
+                    time.sleep(sleep_seconds)
 
     
     def do_evaluation(self, model, bptt, eval_positions, metric, device, method_name, max_classes=10, max_features=100, max_time=300):
@@ -45,7 +70,7 @@ class EvalHelper:
 
         self.check_datasets_data(self.valid_dids_classification)
 
-        self.make_limit_datasets(max_classes, max_features, self.valid_dids_classification)
+        self.make_limit_datasets(max_classes, max_features, self.valid_dids_classification, eval_filters={})
 
         for did in self.valid_dids_classification:
             results[did] = evaluate(self.limit_dict[did], bptt, eval_positions, metric, model, device,method_name=method_name)["mean_metric"]
@@ -63,7 +88,7 @@ class EvalHelper:
 
         self.check_datasets_data(self.test_dids_classification)
 
-        self.make_limit_datasets(max_classes, max_features, self.test_dids_classification)
+        self.make_limit_datasets(max_classes, max_features, self.test_dids_classification, eval_filters={})
 
         for did in self.test_dids_classification:
             results[did] = evaluate(self.limit_dict[did], bptt, eval_positions, metric, model, device,method_name=method_name)["mean_metric"]
@@ -272,7 +297,6 @@ if __name__ == "__main__":
     h = EvalHelper(dids="test")
     #h.do_naive_evaluation()
     #h.log_wandb_naive_evaluation(num_steps=200, log_name="mamba_mean_acc")
-
 
 
 

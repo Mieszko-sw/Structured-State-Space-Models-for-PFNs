@@ -364,9 +364,10 @@ class HydraModel(nn.Module):
 
         style_src, x_src, y_src = src               # Split input into style, train (x) and test (y) part.
 
-        if not style_src: style_src = torch.tensor([]).to(self.device) # To overcome the NoneType has no len() error.
-
         x_src = self.encoder(x_src)
+        if not style_src:
+            style_src = x_src.new_empty((0, x_src.shape[1], x_src.shape[2]))
+
         y_src = self.y_encoder(y_src.unsqueeze(-1) if len(y_src.shape) < len(x_src.shape) else y_src)
 
         train_x = x_src[:single_eval_pos] + y_src[:single_eval_pos]

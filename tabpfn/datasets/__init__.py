@@ -4,6 +4,39 @@ import numpy as np
 import openml
 
 
+def _dataset_to_list_entry(dataset):
+    entry = {
+        "did": int(dataset.dataset_id),
+        "name": dataset.name,
+    }
+    entry.update(dataset.qualities or {})
+    return entry
+
+
+def _list_datasets_with_fallback(dids):
+    if len(dids) == 1:
+        did = int(dids[0])
+        return {
+            did: _dataset_to_list_entry(
+                openml.datasets.get_dataset(did, download_data=False)
+            )
+        }
+
+    try:
+        return openml.datasets.list_datasets(dids)
+    except Exception as exc:
+        print(
+            "OpenML list_datasets failed; falling back to per-dataset metadata "
+            f"loading for {len(dids)} dataset(s): {exc}"
+        )
+        return {
+            int(did): _dataset_to_list_entry(
+                openml.datasets.get_dataset(int(did), download_data=False)
+            )
+            for did in dids
+        }
+
+
 def get_openml_classification(did, max_samples, multiclass=True, shuffled=True):
     dataset = openml.datasets.get_dataset(did)
     X, y, categorical_indicator, attribute_names = dataset.get_data(
@@ -47,7 +80,7 @@ def load_openml_list(dids, filter_for_nan=False
                      , shuffled=True
                      , return_capped = False):
     datasets = []
-    openml_list = openml.datasets.list_datasets(dids)
+    openml_list = _list_datasets_with_fallback(dids)
 
     datalist = pd.DataFrame.from_dict(openml_list, orient="index")
     if filter_for_nan:

@@ -7,6 +7,12 @@ wandb/*
 */wandb/*
 *.cpkt
 */__pycache__/*
+hybrid_trainings/
+looped_training/
+looped_trainings/
+*.logs
+=
+=1.4.0
 
 ### CUDA ###
 *.i

@@ -23,6 +23,19 @@ def causes_sampler_f(num_causes):
     std = np.abs(np.random.normal(0, 1, (num_causes)) * means)
     return means, std
 
+
+def _finite_clamp(tensor, max_abs_value):
+    return torch.nan_to_num(
+        tensor,
+        nan=0.0,
+        posinf=max_abs_value,
+        neginf=-max_abs_value,
+    ).clamp_(min=-max_abs_value, max=max_abs_value)
+
+
+def _standardize(tensor, eps=1e-6):
+    return (tensor - torch.mean(tensor)) / torch.std(tensor).clamp_min(eps)
+
 def get_batch(batch_size, seq_len, num_features, hyperparameters, device=default_device, num_outputs=1, sampling='normal'
               , epoch=None, **kwargs):
     if 'multiclass_type' in hyperparameters and hyperparameters['multiclass_type'] == 'multi_node':
@@ -104,6 +117,8 @@ def get_batch(batch_size, seq_len, num_features, hyperparameters, device=default
                     causes = torch.normal(0., 1., (seq_len, 1, self.num_causes), device=device).float()
                 return causes
 
+            max_abs_value = hyperparameters.get('prior_mlp_max_abs_value', 1e6)
+
             if self.sampling == 'normal':
                 causes = sample_normal()
             elif self.sampling == 'mixed':
@@ -116,8 +131,7 @@ def get_batch(batch_size, seq_len, num_features, hyperparameters, device=default
                             return torch.normal(0., 1., (seq_len, 1), device=device).float()
                     elif random.random() > multi_p:
                         x = torch.multinomial(torch.rand((random.randint(2, 10))), seq_len, replacement=True).to(device).unsqueeze(-1).float()
-                        x = (x - torch.mean(x)) / torch.std(x)
-                        return x
+                        return _standardize(x)
                     else:
                         x = torch.minimum(torch.tensor(np.random.zipf(2.0 + random.random() * 2, size=(seq_len)),
                                             device=device).unsqueeze(-1).float(), torch.tensor(10.0, device=device))
@@ -128,9 +142,10 @@ def get_batch(batch_size, seq_len, num_features, hyperparameters, device=default
             else:
                 raise ValueError(f'Sampling is set to invalid setting: {sampling}.')
 
+            causes = _finite_clamp(causes, max_abs_value)
             outputs = [causes]
             for layer in self.layers:
-                outputs.append(layer(outputs[-1]))
+                outputs.append(_finite_clamp(layer(outputs[-1]), max_abs_value))
             outputs = outputs[2:]
 
             if self.is_causal:
@@ -154,14 +169,15 @@ def get_batch(batch_size, seq_len, num_features, hyperparameters, device=default
                 y = outputs[-1][:, :, :]
                 x = causes
 
-            if bool(torch.any(torch.isnan(x)).detach().cpu().numpy()) or bool(torch.any(torch.isnan(y)).detach().cpu().numpy()):
-                print('Nan caught in MLP model x:', torch.isnan(x).sum(), ' y:', torch.isnan(y).sum())
+            if not torch.isfinite(x).all() or not torch.isfinite(y).all():
+                print('Non-finite values caught in MLP model x:', (~torch.isfinite(x)).sum(), ' y:', (~torch.isfinite(y)).sum())
                 print({k: hyperparameters[k] for k in ['is_causal', 'num_causes', 'prior_mlp_hidden_dim'
                     , 'num_layers', 'noise_std', 'y_is_effect', 'pre_sample_weights', 'prior_mlp_dropout_prob'
                     , 'pre_sample_causes']})
+                raise FloatingPointError("MLP prior generated non-finite values")
 
-                x[:] = 0.0
-                y[:] = -100 # default ignore index for CE
+            x = _finite_clamp(x, max_abs_value)
+            y = _finite_clamp(y, max_abs_value)
 
             # random feature rotation
             if self.random_feature_rotation:
@@ -175,7 +191,19 @@ def get_batch(batch_size, seq_len, num_features, hyperparameters, device=default
         model = MLP(hyperparameters).to(device)
         get_model = lambda: model
 
-    sample = [get_model()() for _ in range(0, batch_size)]
+    def sample_one(max_attempts=16):
+        for attempt in range(max_attempts):
+            try:
+                return get_model()()
+            except FloatingPointError:
+                if attempt == max_attempts - 1:
+                    break
+        x = torch.zeros((seq_len, 1, num_features), device=device)
+        y = torch.full((seq_len, 1, num_outputs), -100., device=device)
+        print(f"MLP prior failed {max_attempts} resampling attempts; using an ignored fallback sample.", flush=True)
+        return x, y
+
+    sample = [sample_one() for _ in range(0, batch_size)]
 
     x, y = zip(*sample)
     y = torch.cat(y, 1).detach().squeeze(2)
@@ -185,4 +213,3 @@ def get_batch(batch_size, seq_len, num_features, hyperparameters, device=default
 
 
 DataLoader = get_batch_to_dataloader(get_batch)
-

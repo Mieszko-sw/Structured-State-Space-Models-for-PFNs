@@ -462,6 +462,9 @@ def hydra_predict(model, eval_xs, eval_ys, eval_position,
 
         return eval_xs.to(device)
 
+    if str(device).startswith("cuda"):
+        torch.cuda.set_device(torch.device(device))
+
     eval_xs, eval_ys = eval_xs.to(device), eval_ys.to(device)
     eval_ys = eval_ys[:eval_position]
 

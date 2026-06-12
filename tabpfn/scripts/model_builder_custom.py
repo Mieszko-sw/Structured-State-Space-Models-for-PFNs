@@ -2,8 +2,10 @@ from functools import partial
 import tabpfn.encoders as encoders
 
 from tabpfn.transformer import TransformerModel
+from tabpfn.looped_transformer import LoopedTransformerModel
 from tabpfn.mamba import MambaModel
 from tabpfn.hydra import HydraModel
+from tabpfn.hybrid import HybridHydraTransformerModel
 from tabpfn.utils import get_uniform_single_eval_pos_sampler
 import torch
 import math
@@ -17,7 +19,7 @@ def load_model_only_inference(path, filename, device, model_name=""):
     cannot be used for further training.
     """
 
-    models_known = ["mamba", "transformer", "hydra"]
+    models_known = ["mamba", "transformer", "looped_transformer", "hydra", "hybrid"]
 
     if not model_name in models_known: raise ValueError(f"Model named {model_name} cannot be loaded as it is not known yet.")
 
@@ -64,6 +66,23 @@ def load_model_only_inference(path, filename, device, model_name=""):
             efficient_eval_masking=config_sample['efficient_eval_masking'],
             full_attention=config_sample.get('enable_transformer_full_attn', False)
             )
+    elif model_name == "looped_transformer":
+        model = LoopedTransformerModel(
+            encoder,
+            n_out,
+            config_sample['emsize'],
+            config_sample['nhead'],
+            nhid,
+            config_sample['nlayers'],
+            y_encoder=y_encoder_generator(1, config_sample['emsize']),
+            dropout=config_sample['dropout'],
+            efficient_eval_masking=config_sample['efficient_eval_masking'],
+            full_attention=config_sample.get('enable_transformer_full_attn', False),
+            looped_warmup_layers=config_sample.get('looped_warmup_layers', 1),
+            looped_core_layers=config_sample.get('looped_core_layers', 2),
+            looped_exit_layers=config_sample.get('looped_exit_layers', 1),
+            looped_core_repeat_pattern=config_sample.get('looped_core_repeat_pattern'),
+            )
     elif model_name == "mamba":
         model = MambaModel(
             encoder=encoder,
@@ -84,6 +103,20 @@ def load_model_only_inference(path, filename, device, model_name=""):
             y_encoder=y_encoder_generator(1, emsize),
             num_layers=config_sample['nlayers'],
             device=device,
+        )
+    elif model_name == "hybrid":
+        model = HybridHydraTransformerModel(
+            encoder=encoder,
+            n_out=n_out,
+            ninp=emsize,
+            nhead=config_sample['nhead'],
+            nhid=nhid,
+            nlayers=config_sample['nlayers'],
+            y_encoder=y_encoder_generator(1, emsize),
+            dropout=config_sample['dropout'],
+            efficient_eval_masking=config_sample['efficient_eval_masking'],
+            full_attention=config_sample.get('enable_transformer_full_attn', False),
+            layer_types=config_sample.get('hybrid_layer_types'),
         )
 
     # print(f"Using a Transformer with {sum(p.numel() for p in model.parameters()) / 1000 / 1000:.{2}f} M parameters")
@@ -379,6 +412,14 @@ def get_model(config,
                   , config=config
                   , transformer_full_attn = config.get("enable_transformer_full_attn", False)
                   , model_type=model_type
+                  , start_epoch=config.get("resume_start_epoch", 0)
+                  , **({"layer_types": config.get("hybrid_layer_types")} if model_type == "hybrid" else {})
+                  , **({
+                        "looped_warmup_layers": config.get("looped_warmup_layers", 1),
+                        "looped_core_layers": config.get("looped_core_layers", 2),
+                        "looped_exit_layers": config.get("looped_exit_layers", 1),
+                        "looped_core_repeat_pattern": config.get("looped_core_repeat_pattern"),
+                    } if model_type == "looped_transformer" else {})
             )
 
     #------------------------------------------------------------------------------------------------

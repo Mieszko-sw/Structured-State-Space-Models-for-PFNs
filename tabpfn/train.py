@@ -145,6 +145,7 @@ def train(priordataloader_class,
         total_positional_losses = 0.
         total_positional_losses_recorded = 0
         nan_steps = 0
+        valid_loss_steps = 0
         ignore_steps = 0
         before_get_batch = time.time()
         assert len(dl) % aggregate_k_gradients == 0, 'Please set the number of steps per epoch s.t. `aggregate_k_gradients` divides it.'
@@ -193,14 +194,30 @@ def train(priordataloader_class,
                         losses = criterion(output, targets)
                     losses = losses.view(*output.shape[0:2])
                     loss, nan_share = utils.torch_nanmean(losses.mean(0), return_nanshare=True)
+                    raw_loss_value = loss.detach()
                     loss = loss / aggregate_k_gradients
 
-                if scaler: loss = scaler.scale(loss)
+                if not torch.isfinite(loss).item():
+                    print(f"Non-finite loss at epoch {epoch}, batch {batch}. Skipping backward/step.")
+                    optimizer.zero_grad(set_to_none=True)
+                    before_get_batch = time.time()
+                    continue
+
+                if scaler:
+                    loss = scaler.scale(loss)
                 loss.backward()
 
                 if batch % aggregate_k_gradients == aggregate_k_gradients - 1:
-                    if scaler: scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
+                    if scaler:
+                        scaler.unscale_(optimizer)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    if not torch.isfinite(grad_norm).item():
+                        print(f"Non-finite grad norm at epoch {epoch}, batch {batch}. Skipping optimizer step.")
+                        if scaler:
+                            scaler.update()
+                        optimizer.zero_grad(set_to_none=True)
+                        before_get_batch = time.time()
+                        continue
                     try:
                         if scaler:
                             scaler.step(optimizer)
@@ -209,12 +226,13 @@ def train(priordataloader_class,
                             optimizer.step()
                     except:
                         print("Invalid optimization step encountered")
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
 
                 step_time = time.time() - before_forward
 
-                if not torch.isnan(loss):
-                    total_loss += losses.mean().cpu().detach().item()
+                if torch.isfinite(raw_loss_value).item():
+                    total_loss += raw_loss_value.cpu().item()
+                    valid_loss_steps += 1
                     total_positional_losses += losses.mean(1).cpu().detach() if single_eval_pos is None else \
                         nn.functional.one_hot(torch.tensor(single_eval_pos), bptt)*\
                         losses[:bptt-single_eval_pos].mean().cpu().detach()
@@ -226,7 +244,8 @@ def train(priordataloader_class,
 
 
             before_get_batch = time.time()
-        return total_loss / steps_per_epoch, (total_positional_losses / total_positional_losses_recorded).tolist(),\
+        denom = max(valid_loss_steps, 1)
+        return total_loss / denom, (total_positional_losses / total_positional_losses_recorded).tolist(),\
                time_to_get_batch, forward_time, step_time, nan_steps.cpu().item()/(batch+1),\
                ignore_steps.cpu().item()/(batch+1)
 
@@ -431,4 +450,3 @@ if __name__ == '__main__':
     train(prior, criterion, encoder_generator,
           y_encoder_generator=y_encoder_generator, pos_encoder_generator=pos_encoder_generator,
           **args.__dict__)
-

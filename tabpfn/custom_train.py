@@ -13,6 +13,7 @@ from torch import nn
 
 import tabpfn.utils as utils
 from tabpfn.transformer import TransformerModel
+from tabpfn.looped_transformer import LoopedTransformerModel
 from tabpfn.utils import get_cosine_schedule_with_warmup, get_openai_lr, StoreDictKeyPair, get_weighted_single_eval_pos_sampler, get_uniform_single_eval_pos_sampler
 import tabpfn.priors as priors
 import tabpfn.encoders as encoders
@@ -23,6 +24,7 @@ from torch import nn
 import wandb
 from tabpfn.mamba import MambaModel
 from tabpfn.hydra import HydraModel
+from tabpfn.hybrid import HybridHydraTransformerModel
 from tabpfn.scripts import tabular_metrics
 import numpy as np
 
@@ -41,8 +43,14 @@ def sample_train(x, y, eval_position, bag_size):
     gen_seed = rng.randint(1e7)
     generator.manual_seed(gen_seed)
 
-    n = eval_position
-    m = bag_size
+    n = int(eval_position)
+    m = int(bag_size)
+    if n <= 0:
+        raise ValueError(
+            "bootstrap_samples requires at least one training example before "
+            "the evaluation position. Set min_eval_pos >= 1 or disable "
+            "bootstrap_samples."
+        )
 
     first_part_x1 = x[1][:n]
     first_part_x2 = x[2][:n]
@@ -150,17 +158,22 @@ def train(priordataloader_class,
           bootstrap_samples=0,
           enable_data_parallel=False,
           config={},
-          model_type="",    # mamba/transformer/hydra
+          model_type="",    # mamba/transformer/hydra/hybrid
+          start_epoch=0,
           transformer_full_attn = False,
           **model_extra_args
           ):
     device = gpu_device if torch.cuda.is_available() else 'cpu:0'
     print(f'Using {device} device')
     using_dist, rank, device = init_dist(device)
+    if torch.cuda.is_available() and str(device).startswith("cuda"):
+        torch.cuda.set_device(torch.device(device))
     single_eval_pos_gen = single_eval_pos_gen if callable(single_eval_pos_gen) else lambda: single_eval_pos_gen
 
     def eval_pos_seq_len_sampler():
         single_eval_pos = single_eval_pos_gen()
+        if bootstrap_samples:
+            single_eval_pos = max(1, single_eval_pos)
         if bptt_extra_samples:
             return single_eval_pos, single_eval_pos + bptt_extra_samples
         else:
@@ -194,9 +207,27 @@ def train(priordataloader_class,
                                 decoder=decoder, 
                                 init_method=initializer, 
                                 efficient_eval_masking=efficient_eval_masking, 
-                                full_attention=transformer_full_attn
+                                full_attention=transformer_full_attn,
                                 **model_extra_args
                                 )
+    elif model_type == "looped_transformer":
+        model = LoopedTransformerModel(encoder,
+                                       n_out,
+                                       emsize,
+                                       nhead,
+                                       nhid,
+                                       nlayers,
+                                       dropout,
+                                       style_encoder=style_encoder,
+                                       y_encoder=y_encoder_generator(1, emsize),
+                                       input_normalization=input_normalization,
+                                       pos_encoder=(pos_encoder_generator or positional_encodings.NoPositionalEncoding)(emsize, bptt*2),
+                                       decoder=decoder,
+                                       init_method=initializer,
+                                       efficient_eval_masking=efficient_eval_masking,
+                                       full_attention=transformer_full_attn,
+                                       **model_extra_args
+                                       )
     elif model_type == "mamba":
         model = MambaModel(
             encoder=encoder,
@@ -218,6 +249,28 @@ def train(priordataloader_class,
             num_layers=nlayers,
             device=device
         )
+    elif model_type == "hybrid":
+        model = HybridHydraTransformerModel(
+            encoder=encoder,
+            n_out=n_out,
+            ninp=emsize,
+            nhead=nhead,
+            nhid=nhid,
+            nlayers=nlayers,
+            dropout=dropout,
+            style_encoder=style_encoder,
+            y_encoder=y_encoder_generator(1, emsize),
+            input_normalization=input_normalization,
+            pos_encoder=(pos_encoder_generator or positional_encodings.NoPositionalEncoding)(emsize, bptt * 2),
+            decoder=decoder,
+            init_method=initializer,
+            efficient_eval_masking=efficient_eval_masking,
+            full_attention=transformer_full_attn,
+            device=device,
+            **model_extra_args
+        )
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
         
 
 
@@ -243,20 +296,32 @@ def train(priordataloader_class,
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = scheduler(optimizer, warmup_epochs, epochs if epochs is not None else 100) # when training for fixed time lr schedule takes 100 steps
+    if start_epoch:
+        print(f"Resuming training after epoch {start_epoch}.", flush=True)
+        for _ in range(start_epoch):
+            scheduler.step()
 
     scaler = GradScaler("cuda") if train_mixed_precision else None
 
     # check that everything uses up-to-date APIs
     utils.check_compatibility(dl)
 
-    def train_epoch():
+    def has_nonfinite_grad():
+        return any(
+            p.grad is not None and not torch.isfinite(p.grad).all()
+            for p in model.parameters()
+        )
+
+    def train_epoch(epoch):
         model.train()  # Turn on the train mode
         total_loss = 0.
         total_positional_losses = 0.
         total_positional_losses_recorded = 0
         nan_steps = 0
+        valid_loss_steps = 0
         #ignore_steps = 0
         before_get_batch = time.time()
+        epoch_start_time = before_get_batch
         assert len(dl) % aggregate_k_gradients == 0, 'Please set the number of steps per epoch s.t. `aggregate_k_gradients` divides it.'
         
         for batch, (data, targets, single_eval_pos) in enumerate(dl):
@@ -265,7 +330,8 @@ def train(priordataloader_class,
 
                 if bootstrap_samples:
 
-                    print(f"Bootstrap samples to a context of length {bootstrap_samples}.")
+                    if batch == 0 and repeat == 0:
+                        print(f"Bootstrap samples to a context of length {bootstrap_samples}.")
 
                     data, targets = sample_train(data, targets, single_eval_pos, bootstrap_samples)
                     single_eval_pos = bootstrap_samples
@@ -282,7 +348,9 @@ def train(priordataloader_class,
                 with cm:
                     time_to_get_batch = time.time() - before_get_batch
                     before_forward = time.time()
-                    if bptt_extra_samples is None:
+                    if bootstrap_samples:
+                        pass
+                    elif bptt_extra_samples is None:
                         single_eval_pos = single_eval_pos_gen() if callable(single_eval_pos_gen) else single_eval_pos_gen
                     else:
                         single_eval_pos = targets.shape[0] - bptt_extra_samples
@@ -300,6 +368,11 @@ def train(priordataloader_class,
                             single_eval_pos=single_eval_pos)
 
                         forward_time = time.time() - before_forward
+                        if not torch.isfinite(output).all().item():
+                            print(f"Non-finite model output at epoch {epoch}, batch {batch}. Skipping backward/step.", flush=True)
+                            optimizer.zero_grad(set_to_none=True)
+                            before_get_batch = time.time()
+                            continue
 
                         if single_eval_pos is not None:
                             targets = targets[single_eval_pos:]
@@ -321,14 +394,35 @@ def train(priordataloader_class,
                         losses = losses.view(*output.shape[0:2])
                         #time.sleep(10)
                         loss, nan_share = utils.torch_nanmean(losses.mean(0), return_nanshare=True)
+                        raw_loss_value = loss.detach()
                         loss = loss / aggregate_k_gradients
 
-                    if scaler: loss = scaler.scale(loss)
+                    if not torch.isfinite(loss).item():
+                        print(f"Non-finite loss at epoch {epoch}, batch {batch}. Skipping backward/step.", flush=True)
+                        optimizer.zero_grad(set_to_none=True)
+                        before_get_batch = time.time()
+                        continue
+
+                    if scaler:
+                        loss = scaler.scale(loss)
                     loss.backward()
+                    if has_nonfinite_grad():
+                        print(f"Non-finite gradient after backward at epoch {epoch}, batch {batch}. Resetting accumulated gradients.", flush=True)
+                        optimizer.zero_grad(set_to_none=True)
+                        before_get_batch = time.time()
+                        continue
 
                     if batch % aggregate_k_gradients == aggregate_k_gradients - 1:
-                        if scaler: scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
+                        if scaler:
+                            scaler.unscale_(optimizer)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        if not torch.isfinite(grad_norm).item():
+                            print(f"Non-finite grad norm at epoch {epoch}, batch {batch}. Skipping optimizer step.", flush=True)
+                            if scaler:
+                                scaler.update()
+                            optimizer.zero_grad(set_to_none=True)
+                            before_get_batch = time.time()
+                            continue
                         try:
                             if scaler:
                                 scaler.step(optimizer)
@@ -337,24 +431,38 @@ def train(priordataloader_class,
                                 optimizer.step()
                         except:
                             print("Invalid optimization step encountered")
-                        optimizer.zero_grad()
+                        optimizer.zero_grad(set_to_none=True)
 
                     step_time = time.time() - before_forward
 
-                    if not torch.isnan(loss):
-                        total_loss += losses.mean().cpu().detach().item()
-                        total_positional_losses += losses.mean(1).cpu().detach() if single_eval_pos is None else \
-                            nn.functional.one_hot(torch.tensor(single_eval_pos), bptt)*\
-                            losses[:bptt-single_eval_pos].mean().cpu().detach()
-
-                        total_positional_losses_recorded += torch.ones(bptt) if single_eval_pos is None else \
-                            nn.functional.one_hot(torch.tensor(single_eval_pos), bptt)
+                    if torch.isfinite(raw_loss_value).item():
+                        total_loss += raw_loss_value.cpu().item()
+                        valid_loss_steps += 1
+                        if single_eval_pos is None:
+                            total_positional_losses += losses.mean(1).cpu().detach()
+                            total_positional_losses_recorded += torch.ones(bptt)
+                        elif single_eval_pos < bptt:
+                            positional_loss = losses[:bptt-single_eval_pos].mean().cpu().detach()
+                            total_positional_losses += nn.functional.one_hot(torch.tensor(single_eval_pos), bptt) * positional_loss
+                            total_positional_losses_recorded += nn.functional.one_hot(torch.tensor(single_eval_pos), bptt)
                     nan_steps += nan_share
                     #ignore_steps += (targets == -100).float().mean()
 
                 before_get_batch = time.time()
 
-        return total_loss / (steps_per_epoch * (permutation_repeat + 1)), \
+            if rank == 0 and (batch + 1) % 50 == 0:
+                elapsed = time.time() - epoch_start_time
+                seconds_per_step = elapsed / (batch + 1)
+                remaining = seconds_per_step * (len(dl) - batch - 1)
+                print(
+                    f"Epoch {epoch}/{epochs} progress {batch + 1}/{len(dl)} | "
+                    f"{seconds_per_step:.2f}s/step | "
+                    f"ETA {datetime.timedelta(seconds=int(remaining))}",
+                    flush=True,
+                )
+
+        denom = max(valid_loss_steps, 1)
+        return total_loss / denom, \
                 [], \
                 time_to_get_batch, \
                 forward_time, \
@@ -367,17 +475,17 @@ def train(priordataloader_class,
 
 
 
-    print("Beginning the Training process")
-    print(f"Total number of epochs: {epochs}")
+    print("Beginning the Training process", flush=True)
+    print(f"Total number of epochs: {epochs}", flush=True)
 
     total_loss = float('inf')
     total_positional_losses = float('inf')
     try:
-        for epoch in (range(1, epochs + 1) if epochs is not None else itertools.count(1)):
+        for epoch in (range(start_epoch + 1, epochs + 1) if epochs is not None else itertools.count(start_epoch + 1)):
 
             epoch_start_time = time.time()
             total_loss, total_positional_losses, time_to_get_batch, forward_time, step_time, nan_share, ignore_share =\
-                train_epoch()
+                train_epoch(epoch)
             if hasattr(dl, 'validate') and epoch % validation_period == 0:
                 with torch.no_grad():
                     val_score = dl.validate(model)
@@ -408,12 +516,13 @@ def train(priordataloader_class,
             if evaluation_class:
                 metric_used = tabular_metrics.auc_metric
                 eval_positions = [1000]
+                evaluation_method_name = "transformer" if model_type in {"hybrid", "looped_transformer"} else model_type
                 eval_result = evaluation_class.do_evaluation(model=model, 
                                                              bptt=bptt,
                                                              eval_positions=eval_positions,
                                                              metric=metric_used, 
                                                              device=device, 
-                                                             method_name="mamba")
+                                                             method_name=evaluation_method_name)
                 
                 wandb_dict[f"test/{model_type}_mean_acc"] = eval_result
 

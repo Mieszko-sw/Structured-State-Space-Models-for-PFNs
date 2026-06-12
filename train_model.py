@@ -2,14 +2,6 @@
 #                                        IMPORTS
 #------------------------------------------------------------------------------------------------
 import os
-import sys
-import re
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(line_buffering=True)
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(line_buffering=True)
-
 print(f"currently in {os.getcwd()}")
 from datetime import datetime
 
@@ -76,8 +68,7 @@ config["num_features_used"] = uniform_int_sampler_f(1, max_features)
 #                                          CUSTOM
 #------------------------------------------------------------------------------------------------
 
-model_type = "hybrid"
-checkpoint_model_name = "hybrid_12_layers"
+model_type = "hydra"
 
 config['batch_size'] = 64 
 config['emsize'] = 512 
@@ -85,111 +76,16 @@ config["epochs"] = 200
 config["bptt"] = 1024
 config["max_eval_pos"] = 1000        
 
-config["num_steps"] = 584
+config["num_steps"] = 1024
 
-config["nlayers"] = 8
-config["lr"] = 1e-5
-config["enable_autocast"] = False
-config["train_mixed_precision"] = False
+config["nlayers"] = 12
+config["enable_autocast"] = True
 config["enable_transformer_full_attn"] = False
-config["bootstrap_samples"] = config["bptt"]          # Default would be 0.
+config["bootstrap_samples"] = 4096          # Default would be 0. 
 config["permutation_repeat"] = 0
 
-# Conservative restart settings for the hybrid run.  The original MLP prior
-# ranges can create extreme finite values that later explode into NaN/Inf
-# gradients; keep the same prior family, but narrow the most volatile tails.
-stability_overrides = config["differentiable_hyperparameters"]
-stability_overrides["prior_mlp_dropout_prob"].update({
-    "scale": 0.6,
-    "min": 0.0,
-    "max": 1.0,
-})
-stability_overrides["init_std"].update({
-    "max_mean": 1.5,
-})
-stability_overrides["noise_std"].update({
-    "max_mean": 0.1,
-})
-config["prior_mlp_max_abs_value"] = 1e4
-
-device = "cuda:3"
+device = "cuda:0"
 ENABLE_DATA_PARALLEL = False
-CHECKPOINT_DIR = Path("tabpfn/models_diff")
-RESUME_FROM_LATEST_CHECKPOINT = os.environ.get("RESUME_FROM_LATEST_CHECKPOINT", "1").lower() not in {
-    "0",
-    "false",
-    "no",
-}
-
-def find_latest_callback_checkpoint(checkpoint_model_name):
-    candidates = []
-    pattern = re.compile(rf"callback_{re.escape(checkpoint_model_name)}_epoch_(\d+)\.cpkt$")
-    for checkpoint_path in CHECKPOINT_DIR.glob(f"callback_{checkpoint_model_name}_epoch_*.cpkt"):
-        match = pattern.match(checkpoint_path.name)
-        if match:
-            candidates.append((int(match.group(1)), checkpoint_path))
-    latest_checkpoint = CHECKPOINT_DIR / f"callback_{checkpoint_model_name}_latest.cpkt"
-    if latest_checkpoint.is_file():
-        try:
-            _, _, latest_config = torch.load(latest_checkpoint, map_location="cpu")
-            candidates.append((int(latest_config.get("stop_epoch", 0)), latest_checkpoint))
-        except Exception as exc:
-            print(f"Could not inspect latest checkpoint {latest_checkpoint}: {exc}", flush=True)
-    return max(candidates, default=(0, None))
-
-def infer_checkpoint_epoch(checkpoint_path):
-    match = re.search(r"_epoch_(\d+)\.cpkt$", checkpoint_path.name)
-    return int(match.group(1)) if match else 0
-
-def load_resume_checkpoint(checkpoint_path):
-    checkpoint_path = checkpoint_path.expanduser()
-    if not checkpoint_path.is_file():
-        raise FileNotFoundError(f"Resume checkpoint does not exist: {checkpoint_path}")
-
-    print(f"Loading checkpoint from {checkpoint_path}", flush=True)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    state_dict, _, checkpoint_config = checkpoint
-    state_dict = {
-        key.replace("module.", ""): value
-        for key, value in state_dict.items()
-    }
-    checkpoint_epoch = int(
-        checkpoint_config.get("stop_epoch") or infer_checkpoint_epoch(checkpoint_path)
-    )
-    return state_dict, checkpoint_config, checkpoint_epoch
-
-resume_checkpoint = os.environ.get("RESUME_FROM_CHECKPOINT")
-resume_start_epoch = 0
-resume_state_dict = None
-
-if resume_checkpoint is None and RESUME_FROM_LATEST_CHECKPOINT:
-    resume_start_epoch, latest_checkpoint = find_latest_callback_checkpoint(checkpoint_model_name)
-    resume_checkpoint = str(latest_checkpoint) if latest_checkpoint is not None else None
-
-if resume_checkpoint:
-    checkpoint_path = Path(resume_checkpoint)
-    resume_state_dict, checkpoint_config, checkpoint_epoch = load_resume_checkpoint(checkpoint_path)
-    resume_start_epoch = checkpoint_epoch
-    config["resume_checkpoint"] = str(checkpoint_path)
-    config["resume_start_epoch"] = resume_start_epoch
-    if resume_start_epoch >= config["epochs"]:
-        print(
-            f"Checkpoint is already at epoch {resume_start_epoch}, "
-            f"which is >= configured epochs {config['epochs']}.",
-            flush=True,
-        )
-    else:
-        print(
-            f"Resuming from epoch {resume_start_epoch}; next epoch is {resume_start_epoch + 1}.",
-            flush=True,
-        )
-else:
-    config["resume_checkpoint"] = None
-    config["resume_start_epoch"] = 0
-    if RESUME_FROM_LATEST_CHECKPOINT:
-        print("No callback checkpoint found; starting from scratch.", flush=True)
-    else:
-        print("Checkpoint auto-resume disabled; starting from scratch.", flush=True)
 
 #os.environ["SLURM_PROCID"]="1"
 
@@ -203,27 +99,11 @@ else:
 
 wandb_project = "mamba_project"
 wandb_job_type = f"create_{model_type}_model"
-wandb_run_name = f"{model_type} hydra-transformer {config['nlayers']}l {config['emsize']}e {config['batch_size']}b lr{config['lr']}_fp32"
+wandb_run_name = f"{model_type} {config['nlayers']}l {config['emsize']}e {config['batch_size']}b"
 
 wandb_config= config
 
-wandb_mode = os.environ.get("WANDB_MODE")
-if wandb_mode is None and not os.environ.get("WANDB_API_KEY"):
-    wandb_mode = "offline"
-    print("W&B API key is not configured; starting this run in offline mode.", flush=True)
-
-wandb_run = wandb.init(
-    project=wandb_project,
-    job_type=wandb_job_type,
-    config=wandb_config,
-    name=wandb_run_name,
-    group="DDP",
-    mode=wandb_mode,
-)
-
-run_url = wandb_run.url or wandb_run.dir
-print(f"WANDB_RUN_URL={run_url}", flush=True)
-Path("wandb_run_url.txt").write_text(f"{run_url}\n")
+wandb_run = wandb.init(project=wandb_project,job_type=wandb_job_type,config=wandb_config, name=wandb_run_name, group="DDP")
 
 #------------------------------------------------------------------------------------------------
 #                                         END WANDB
@@ -238,12 +118,11 @@ eval_class = EvalHelper()
 
 # Get the model 
 #model = get_model(config, device, should_train=True, verbose=0) # , state_dict=model[2].state_dict()
-hybrid_model = get_model(config, 
+hydra_model = get_model(config, 
                               device, 
                               should_train=True, 
                               verbose=1,
-                              state_dict=resume_state_dict,
-                              epoch_callback=lambda model, epoch, config, _: epoch_callback(model, epoch, config, checkpoint_model_name),
+                              epoch_callback=epoch_callback,
                               use_autocast=config["enable_autocast"], 
                               evaluation_class=eval_class,
                               permutation_repeat=config["permutation_repeat"],
@@ -252,12 +131,12 @@ hybrid_model = get_model(config,
                               model_type=model_type
                               ) # , state_dict=model[2].state_dict()
 
-(hp_embedding, data, _), targets, single_eval_pos = next(iter(hybrid_model[3]))
+(hp_embedding, data, _), targets, single_eval_pos = next(iter(hydra_model[3]))
 
-# Save Hybrid Hydra/Transformer Model
-save_model(hybrid_model[2], 
+# Save Hydra Model
+save_model(hydra_model[2], 
            base_path, 
-           f"tabpfn/models_diff/{checkpoint_model_name}_{config['nlayers']}l.cpkt",
+           f'tabpfn/models_diff/hydra_{config["nlayers"]}l.cpkt',
            config
            )
 
@@ -269,3 +148,7 @@ save_model(hybrid_model[2],
 wandb_run.finish()
 
 print("works")
+
+
+
+

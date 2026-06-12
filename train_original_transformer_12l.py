@@ -5,10 +5,29 @@ import os
 import sys
 import re
 
+LOG_FILE_PATH = "original_transformer_12l.log"
+
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
+
+log_file = open(LOG_FILE_PATH, "a", buffering=1)
+sys.stdout = Tee(sys.stdout, log_file)
+sys.stderr = Tee(sys.stderr, log_file)
 
 print(f"currently in {os.getcwd()}")
 from datetime import datetime
@@ -76,8 +95,8 @@ config["num_features_used"] = uniform_int_sampler_f(1, max_features)
 #                                          CUSTOM
 #------------------------------------------------------------------------------------------------
 
-model_type = "hybrid"
-checkpoint_model_name = "hybrid_12_layers"
+model_type = "transformer"
+checkpoint_model_name = "original_transformer_12l"
 
 config['batch_size'] = 64 
 config['emsize'] = 512 
@@ -87,7 +106,7 @@ config["max_eval_pos"] = 1000
 
 config["num_steps"] = 584
 
-config["nlayers"] = 8
+config["nlayers"] = 12
 config["lr"] = 1e-5
 config["enable_autocast"] = False
 config["train_mixed_precision"] = False
@@ -95,7 +114,7 @@ config["enable_transformer_full_attn"] = False
 config["bootstrap_samples"] = config["bptt"]          # Default would be 0.
 config["permutation_repeat"] = 0
 
-# Conservative restart settings for the hybrid run.  The original MLP prior
+# Conservative restart settings for the original Transformer run.  The original MLP prior
 # ranges can create extreme finite values that later explode into NaN/Inf
 # gradients; keep the same prior family, but narrow the most volatile tails.
 stability_overrides = config["differentiable_hyperparameters"]
@@ -112,7 +131,7 @@ stability_overrides["noise_std"].update({
 })
 config["prior_mlp_max_abs_value"] = 1e4
 
-device = "cuda:3"
+device = os.environ.get("TRAIN_DEVICE", "cuda:7")
 ENABLE_DATA_PARALLEL = False
 CHECKPOINT_DIR = Path("tabpfn/models_diff")
 RESUME_FROM_LATEST_CHECKPOINT = os.environ.get("RESUME_FROM_LATEST_CHECKPOINT", "1").lower() not in {
@@ -203,7 +222,7 @@ else:
 
 wandb_project = "mamba_project"
 wandb_job_type = f"create_{model_type}_model"
-wandb_run_name = f"{model_type} hydra-transformer {config['nlayers']}l {config['emsize']}e {config['batch_size']}b lr{config['lr']}_fp32"
+wandb_run_name = f"{checkpoint_model_name} {config['nlayers']}l {config['emsize']}e {config['batch_size']}b lr{config['lr']}_fp32"
 
 wandb_config= config
 
@@ -238,7 +257,7 @@ eval_class = EvalHelper()
 
 # Get the model 
 #model = get_model(config, device, should_train=True, verbose=0) # , state_dict=model[2].state_dict()
-hybrid_model = get_model(config, 
+transformer_model = get_model(config, 
                               device, 
                               should_train=True, 
                               verbose=1,
@@ -252,10 +271,10 @@ hybrid_model = get_model(config,
                               model_type=model_type
                               ) # , state_dict=model[2].state_dict()
 
-(hp_embedding, data, _), targets, single_eval_pos = next(iter(hybrid_model[3]))
+(hp_embedding, data, _), targets, single_eval_pos = next(iter(transformer_model[3]))
 
-# Save Hybrid Hydra/Transformer Model
-save_model(hybrid_model[2], 
+# Save original 12-layer Transformer model
+save_model(transformer_model[2], 
            base_path, 
            f"tabpfn/models_diff/{checkpoint_model_name}_{config['nlayers']}l.cpkt",
            config
