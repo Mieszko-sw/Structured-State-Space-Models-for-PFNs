@@ -26,12 +26,14 @@ EVALUATION_TYPE_FILTERS = {
 
 EVALUATION_METHODS = [
     "alternating",
+    "hybrid_8_layers_latest",
     "original_transformer_12l",
     "transformer",
     "hydra",
 ]
 
 ALTERNATING_MODEL_NAME = "tabpfn/models_diff/callback_hybrid_6hydra_6transformer_epoch_200.cpkt"
+HYBRID_8_LAYERS_LATEST_MODEL_NAME = "tabpfn/models_diff/callback_hybrid_8_layers_latest.cpkt"
 ORIGINAL_TRANSFORMER_12L_MODEL_NAME = "tabpfn/models_diff/callback_original_transformer_12l_latest.cpkt"
 TRANSFORMER_MODEL_NAME = "tabpfn/models_diff/tabpfn_transformer_model.cpkt"
 HYDRA_MODEL_NAME = "tabpfn/models_diff/hydra_small.cpkt"
@@ -100,6 +102,19 @@ def evaluate_alternating_model():
     return run_model_evaluation(hybrid_model, hybrid_config, method_name="transformer")
 
 
+def evaluate_hybrid_8_layers_latest_model():
+    hybrid_loaded, hybrid_config = load_model_only_inference(
+        ".",
+        HYBRID_8_LAYERS_LATEST_MODEL_NAME,
+        device,
+        model_name="hybrid",
+    )
+
+    hybrid_model = hybrid_loaded[2]
+    print_parameter_count("hybrid_8_layers_latest", hybrid_model)
+    return run_model_evaluation(hybrid_model, hybrid_config, method_name="transformer")
+
+
 def evaluate_transformer_model():
     transformer_loaded, transformer_config, _ = transformer_load_model_workflow(
         2,
@@ -153,6 +168,8 @@ def do_evaluation(eval_list):
     for method_name in eval_list:
         if method_name == "alternating":
             result_dict[method_name] = evaluate_alternating_model()
+        elif method_name == "hybrid_8_layers_latest":
+            result_dict[method_name] = evaluate_hybrid_8_layers_latest_model()
         elif method_name == "original_transformer_12l":
             result_dict[method_name] = evaluate_original_transformer_12l_model()
         elif method_name == "transformer":

@@ -68,7 +68,7 @@ config["num_features_used"] = uniform_int_sampler_f(1, max_features)
 #                                          CUSTOM
 #------------------------------------------------------------------------------------------------
 
-model_type = "hydra"
+model_type = "transformer"
 
 config['batch_size'] = 64 
 config['emsize'] = 512 
@@ -84,7 +84,7 @@ config["enable_transformer_full_attn"] = False
 config["bootstrap_samples"] = 4096          # Default would be 0. 
 config["permutation_repeat"] = 0
 
-device = "cuda:0"
+device = "cuda:1"
 ENABLE_DATA_PARALLEL = False
 
 #os.environ["SLURM_PROCID"]="1"
@@ -104,6 +104,7 @@ wandb_run_name = f"{model_type} {config['nlayers']}l {config['emsize']}e {config
 wandb_config= config
 
 wandb_run = wandb.init(project=wandb_project,job_type=wandb_job_type,config=wandb_config, name=wandb_run_name, group="DDP")
+print(f"W&B run URL: {wandb_run.url}")
 
 #------------------------------------------------------------------------------------------------
 #                                         END WANDB
@@ -136,7 +137,7 @@ hydra_model = get_model(config,
 # Save Hydra Model
 save_model(hydra_model[2], 
            base_path, 
-           f'tabpfn/models_diff/hydra_{config["nlayers"]}l.cpkt',
+           f'tabpfn/models_diff/transformer_{config["nlayers"]}l.cpkt',
            config
            )
 
