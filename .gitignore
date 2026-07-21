@@ -214,3 +214,18 @@ pyrightconfig.json
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode,cuda
+
+# Local repositories and backups
+nanoTabPFN/
+Structured-State-Space-Models-for-PFNs.git/
+work_backup_before_gdn2.tar.gz
+
+# Local repositories and backups
+nanoTabPFN/
+Structured-State-Space-Models-for-PFNs.git/
+work_backup_before_gdn2.tar.gz
+
+# Local repositories and backups
+nanoTabPFN/
+Structured-State-Space-Models-for-PFNs.git/
+work_backup_before_gdn2.tar.gz

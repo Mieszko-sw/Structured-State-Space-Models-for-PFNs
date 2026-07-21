@@ -538,7 +538,11 @@ def transformer_predict(model, eval_xs, eval_ys, eval_position,
     labels = torch.split(labels, batch_size_inference, dim=1)
     #print('PREPROCESSING TIME', str(time.time() - start))
     outputs = []
-    start = time.time()
+    # CUDA kernels are asynchronous. Synchronize inside the measured region so
+    # the reported time includes completed GPU work, not just kernel launches.
+    if str(device).startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize(torch.device(device))
+    start = time.perf_counter()
     for batch_input, batch_label in zip(inputs, labels):
         #preprocess_transform_ = preprocess_transform if styles_configuration % 2 == 0 else 'none'
         import warnings
@@ -554,7 +558,9 @@ def transformer_predict(model, eval_xs, eval_ys, eval_position,
                     output_batch = checkpoint(predict, batch_input, batch_label, style_, softmax_temperature_, True, use_reentrant=False)
         outputs += [output_batch]
 
-    model_inference_time = time.time()-start
+    if str(device).startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize(torch.device(device))
+    model_inference_time = time.perf_counter() - start
 
     outputs = torch.cat(outputs, 1)
     for i, ensemble_configuration in enumerate(ensemble_configurations):

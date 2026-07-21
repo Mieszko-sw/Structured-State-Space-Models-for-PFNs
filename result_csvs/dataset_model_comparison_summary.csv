@@ -1,5 +1,4 @@
 model,num_dataset_wins
-tabpfn,19
-hybrid,5
-hydra,4
-looped_transformer_depth3,2
+tabpfn,18
+hybrid_8l,9
+hydra,3

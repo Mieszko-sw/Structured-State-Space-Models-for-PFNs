@@ -1,9 +1,17 @@
 import os
+import sys
+
+import torch
 
 import pandas as pd
 from scipy import stats
 
+NANOTABPFN_IMPORT_PATH = os.path.join(os.path.dirname(__file__), "nanoTabPFN")
+if NANOTABPFN_IMPORT_PATH not in sys.path:
+    sys.path.insert(0, NANOTABPFN_IMPORT_PATH)
+
 from evaluation_helper import EvalHelper
+from model import NanoTabPFNModel
 from tabpfn.scripts import tabular_metrics
 from tabpfn.scripts.hydra_prediction_interface import (
     load_model_workflow as hydra_load_model_workflow,
@@ -26,17 +34,39 @@ EVALUATION_TYPE_FILTERS = {
 
 EVALUATION_METHODS = [
     "alternating",
+    "alternating_hydra_tabpfn_latest",
+    "alternating_hydra_tabpfn_epoch_200",
+    "alternating_hydra_tabpfn_final",
+    "new_looped_transformer_6physical_core4x2",
+    "pure_hydra_12_layers_512e",
     "hybrid_8_layers_latest",
     "original_transformer_12l",
     "transformer",
     "hydra",
+    "nanotabpfn",
 ]
 
-ALTERNATING_MODEL_NAME = "tabpfn/models_diff/callback_hybrid_6hydra_6transformer_epoch_200.cpkt"
+ALTERNATING_MODEL_NAME = "tabpfn/models_diff/callback_alternating_hydra_tabpfn_12_layers_512e_lr0p0001_epoch_200.cpkt"
+ALTERNATING_HYDRA_TABPFN_LATEST_MODEL_NAME = (
+    "tabpfn/models_diff/callback_alternating_hydra_tabpfn_12_layers_512e_lr0p0001_latest.cpkt"
+)
+ALTERNATING_HYDRA_TABPFN_EPOCH_200_MODEL_NAME = (
+    "tabpfn/models_diff/callback_alternating_hydra_tabpfn_12_layers_512e_lr0p0001_epoch_200.cpkt"
+)
+ALTERNATING_HYDRA_TABPFN_FINAL_MODEL_NAME = (
+    "tabpfn/models_diff/alternating_hydra_tabpfn_12_layers_512e_lr0p0001_12l.cpkt"
+)
+NEW_LOOPED_TRANSFORMER_6PHYSICAL_CORE4X2_MODEL_NAME = (
+    "tabpfn/models_diff/new_looped_transformer_6physical_core4x2_10l.cpkt"
+)
+PURE_HYDRA_12_LAYERS_512E_MODEL_NAME = (
+    "tabpfn/models_diff/pure_hydra_12_layers_512e_12l.cpkt"
+)
 HYBRID_8_LAYERS_LATEST_MODEL_NAME = "tabpfn/models_diff/callback_hybrid_8_layers_latest.cpkt"
 ORIGINAL_TRANSFORMER_12L_MODEL_NAME = "tabpfn/models_diff/callback_original_transformer_12l_latest.cpkt"
 TRANSFORMER_MODEL_NAME = "tabpfn/models_diff/tabpfn_transformer_model.cpkt"
 HYDRA_MODEL_NAME = "tabpfn/models_diff/hydra_small.cpkt"
+NANOTABPFN_MODEL_NAME = "nanoTabPFN/nanotabpfn_trained.pt"
 
 METRIC_USED = tabular_metrics.auc_metric
 RESULT_CSV_SAVE_DIR = os.path.join("result_csvs", "alternating_hybrid_eval.csv")
@@ -55,6 +85,28 @@ SAMPLE_BAGGING = 0
 device = "cuda:0"
 
 eval_helper = EvalHelper()
+
+
+class NanoTabPFNEvaluationWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.criterion = None
+
+    def forward(self, src, single_eval_pos):
+        _, eval_xs, eval_ys = src
+        x = eval_xs.transpose(0, 1).contiguous()
+        y = eval_ys[:single_eval_pos].squeeze(-1).transpose(0, 1).contiguous()
+        output = self.model((x, y), train_test_split_index=single_eval_pos)
+        return output.transpose(0, 1).contiguous()
+
+
+def load_nanotabpfn_model(model_path=NANOTABPFN_MODEL_NAME):
+    checkpoint = torch.load(model_path, map_location="cpu")
+    model = NanoTabPFNModel(**checkpoint["model_config"])
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+    return NanoTabPFNEvaluationWrapper(model), checkpoint.get("evaluation_config", {})
 
 
 def print_parameter_count(model_name, model):
@@ -102,17 +154,85 @@ def evaluate_alternating_model():
     return run_model_evaluation(hybrid_model, hybrid_config, method_name="transformer")
 
 
-def evaluate_hybrid_8_layers_latest_model():
+def evaluate_hybrid_model(model_path, model_label):
     hybrid_loaded, hybrid_config = load_model_only_inference(
         ".",
-        HYBRID_8_LAYERS_LATEST_MODEL_NAME,
+        model_path,
         device,
         model_name="hybrid",
     )
 
     hybrid_model = hybrid_loaded[2]
-    print_parameter_count("hybrid_8_layers_latest", hybrid_model)
+    print_parameter_count(model_label, hybrid_model)
     return run_model_evaluation(hybrid_model, hybrid_config, method_name="transformer")
+
+
+def evaluate_looped_transformer_model(model_path, model_label):
+    looped_loaded, looped_config = load_model_only_inference(
+        ".",
+        model_path,
+        device,
+        model_name="looped_transformer",
+    )
+
+    looped_model = looped_loaded[2]
+    print_parameter_count(model_label, looped_model)
+    return run_model_evaluation(looped_model, looped_config, method_name="transformer")
+
+
+def evaluate_custom_hydra_model(model_path, model_label):
+    hydra_loaded, hydra_config = load_model_only_inference(
+        ".",
+        model_path,
+        device,
+        model_name="hydra",
+    )
+
+    hydra_model = hydra_loaded[2]
+    print_parameter_count(model_label, hydra_model)
+    return run_model_evaluation(hydra_model, hydra_config, method_name="hydra")
+
+
+def evaluate_alternating_hydra_tabpfn_latest_model():
+    return evaluate_hybrid_model(
+        ALTERNATING_HYDRA_TABPFN_LATEST_MODEL_NAME,
+        "alternating_hydra_tabpfn_latest",
+    )
+
+
+def evaluate_alternating_hydra_tabpfn_epoch_200_model():
+    return evaluate_hybrid_model(
+        ALTERNATING_HYDRA_TABPFN_EPOCH_200_MODEL_NAME,
+        "alternating_hydra_tabpfn_epoch_200",
+    )
+
+
+def evaluate_alternating_hydra_tabpfn_final_model():
+    return evaluate_hybrid_model(
+        ALTERNATING_HYDRA_TABPFN_FINAL_MODEL_NAME,
+        "alternating_hydra_tabpfn_final",
+    )
+
+
+def evaluate_new_looped_transformer_6physical_core4x2_model():
+    return evaluate_looped_transformer_model(
+        NEW_LOOPED_TRANSFORMER_6PHYSICAL_CORE4X2_MODEL_NAME,
+        "new_looped_transformer_6physical_core4x2",
+    )
+
+
+def evaluate_pure_hydra_12_layers_512e_model():
+    return evaluate_custom_hydra_model(
+        PURE_HYDRA_12_LAYERS_512E_MODEL_NAME,
+        "pure_hydra_12_layers_512e",
+    )
+
+
+def evaluate_hybrid_8_layers_latest_model():
+    return evaluate_hybrid_model(
+        HYBRID_8_LAYERS_LATEST_MODEL_NAME,
+        "hybrid_8_layers_latest",
+    )
 
 
 def evaluate_transformer_model():
@@ -162,12 +282,45 @@ def evaluate_hydra_model():
     return run_model_evaluation(hydra_model, hydra_config, method_name="hydra")
 
 
+def evaluate_nanotabpfn_model():
+    model, config = load_nanotabpfn_model()
+    print_parameter_count("nanotabpfn", model)
+    return eval_helper.do_evaluation_custom(
+        model,
+        bptt=config.get("bptt", 150),
+        eval_positions=config.get("eval_positions", [75]),
+        metric=METRIC_USED,
+        device=device,
+        method_name="transformer",
+        evaluation_type=EVALUATION_TYPE,
+        max_classes=config.get("max_num_classes", 2),
+        max_features=config.get("max_num_features", 5),
+        split_numbers=SPLIT_NUMBERS,
+        jrt_prompt=JRT_PROMPT,
+        single_evaluation_prompt=SINGLE_EVAL_PROMPT,
+        permutation_bagging=PERMUTATION_BAGGING,
+        sample_bagging=SAMPLE_BAGGING,
+        eval_filters=EVALUATION_TYPE_FILTERS,
+        return_whole_output=True,
+    )
+
+
 def do_evaluation(eval_list):
     result_dict = {}
 
     for method_name in eval_list:
         if method_name == "alternating":
             result_dict[method_name] = evaluate_alternating_model()
+        elif method_name == "alternating_hydra_tabpfn_latest":
+            result_dict[method_name] = evaluate_alternating_hydra_tabpfn_latest_model()
+        elif method_name == "alternating_hydra_tabpfn_epoch_200":
+            result_dict[method_name] = evaluate_alternating_hydra_tabpfn_epoch_200_model()
+        elif method_name == "alternating_hydra_tabpfn_final":
+            result_dict[method_name] = evaluate_alternating_hydra_tabpfn_final_model()
+        elif method_name == "new_looped_transformer_6physical_core4x2":
+            result_dict[method_name] = evaluate_new_looped_transformer_6physical_core4x2_model()
+        elif method_name == "pure_hydra_12_layers_512e":
+            result_dict[method_name] = evaluate_pure_hydra_12_layers_512e_model()
         elif method_name == "hybrid_8_layers_latest":
             result_dict[method_name] = evaluate_hybrid_8_layers_latest_model()
         elif method_name == "original_transformer_12l":
@@ -176,6 +329,8 @@ def do_evaluation(eval_list):
             result_dict[method_name] = evaluate_transformer_model()
         elif method_name == "hydra":
             result_dict[method_name] = evaluate_hydra_model()
+        elif method_name == "nanotabpfn":
+            result_dict[method_name] = evaluate_nanotabpfn_model()
         else:
             raise ValueError(f"Unknown evaluation method: {method_name}")
 

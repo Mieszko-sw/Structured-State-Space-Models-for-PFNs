@@ -21,21 +21,42 @@ from tabpfn.scripts.transformer_prediction_interface import (
 
 MODEL_PATHS = {
     "hybrid_12l": "tabpfn/models_diff/callback_hybrid_6hydra_6transformer_epoch_200.cpkt",
-    "hybrid_8l": "tabpfn/models_diff/lr_new_hybrid_8l.cpkt",
+    "alternating_hydra_tabpfn_latest": (
+        "tabpfn/models_diff/callback_alternating_hydra_tabpfn_12_layers_512e_lr0p0001_latest.cpkt"
+    ),
+    "alternating_hydra_tabpfn_epoch_200": (
+        "tabpfn/models_diff/callback_alternating_hydra_tabpfn_12_layers_512e_lr0p0001_epoch_200.cpkt"
+    ),
+    "alternating_hydra_tabpfn_final": (
+        "tabpfn/models_diff/alternating_hydra_tabpfn_12_layers_512e_lr0p0001_12l.cpkt"
+    ),
+    "hybrid_8l": "tabpfn/models_diff/callback_hybrid_8_layers_latest.cpkt",
     "tabpfn": "tabpfn/models_diff/tabpfn_transformer_model.cpkt",
-    "hydra": "tabpfn/models_diff/hydra_small.cpkt",
+    "hydra": "tabpfn/models_diff/callback_pure_hydra_12_layers_512e_latest.cpkt",
+    "hydra_22M": "tabpfn/models_diff/callback_pure_hydra_12_layers_512e_latest.cpkt",
+    "hydra_small": "tabpfn/models_diff/hydra_small.cpkt",
 }
 
 MODEL_TYPES = {
     "hybrid_12l": "hybrid",
+    "alternating_hydra_tabpfn_latest": "hybrid",
+    "alternating_hydra_tabpfn_epoch_200": "hybrid",
+    "alternating_hydra_tabpfn_final": "hybrid",
     "hybrid_8l": "hybrid",
+    "hydra": "hydra",
+    "hydra_22M": "hydra",
 }
 
 PREDICTION_METHODS = {
     "hybrid_12l": "transformer",
+    "alternating_hydra_tabpfn_latest": "transformer",
+    "alternating_hydra_tabpfn_epoch_200": "transformer",
+    "alternating_hydra_tabpfn_final": "transformer",
     "hybrid_8l": "transformer",
     "tabpfn": "transformer",
     "hydra": "hydra",
+    "hydra_22M": "hydra",
+    "hydra_small": "hydra",
 }
 
 METRIC_USED = tabular_metrics.auc_metric
@@ -55,15 +76,20 @@ RAW_COLUMNS = [
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Measure synchronized inference speed for 12L and 8L hybrid, Hydra, "
+            "Measure synchronized inference speed for hybrid Hydra-TabPFN, Hydra, "
             "and TabPFN models."
         )
     )
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--device", default="cuda:4")
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["hybrid_12l", "hybrid_8l", "hydra", "tabpfn"],
+        default=[
+            "hybrid_8l",
+            "hydra_22M",
+            "hydra_small",
+            "tabpfn",
+        ],
         choices=list(MODEL_PATHS),
     )
     parser.add_argument(
@@ -72,7 +98,7 @@ def parse_args():
         type=int,
         default=[512, 1024, 2048, 4096, 8192, 16384, 32768],
     )
-    parser.add_argument("--num-features", type=int, default=100)
+    parser.add_argument("--num-features", type=int, default=10)
     parser.add_argument("--num-classes", type=int, default=2)
     parser.add_argument("--warmup-runs", type=int, default=2)
     parser.add_argument("--timed-runs", type=int, default=10)
@@ -136,15 +162,8 @@ def make_dummy_dataset(table_size, num_features, num_classes, seed):
 
 
 def load_model(model_name, device):
-    if model_name in MODEL_TYPES:
-        loaded, config = load_model_only_inference(
-            ".",
-            MODEL_PATHS[model_name],
-            device,
-            model_name=MODEL_TYPES[model_name],
-        )
-    elif model_name == "tabpfn":
-        loaded, config, _ = transformer_load_model_workflow(
+    if model_name == "hydra_small":
+        loaded, config, _ = hydra_load_model_workflow(
             2,
             -1,
             add_name="",
@@ -154,8 +173,15 @@ def load_model(model_name, device):
             only_inference=True,
             model_path_custom=MODEL_PATHS[model_name],
         )
-    elif model_name == "hydra":
-        loaded, config, _ = hydra_load_model_workflow(
+    elif model_name in MODEL_TYPES:
+        loaded, config = load_model_only_inference(
+            ".",
+            MODEL_PATHS[model_name],
+            device,
+            model_name=MODEL_TYPES[model_name],
+        )
+    elif model_name == "tabpfn":
+        loaded, config, _ = transformer_load_model_workflow(
             2,
             -1,
             add_name="",

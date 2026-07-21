@@ -39,9 +39,36 @@ def _list_datasets_with_fallback(dids):
 
 def get_openml_classification(did, max_samples, multiclass=True, shuffled=True):
     dataset = openml.datasets.get_dataset(did)
-    X, y, categorical_indicator, attribute_names = dataset.get_data(
-        dataset_format="array", target=dataset.default_target_attribute
-    )
+    try:
+        X, y, categorical_indicator, attribute_names = dataset.get_data(
+            dataset_format="array", target=dataset.default_target_attribute
+        )
+    except Exception as error:
+        if "cannot handle string" not in str(error):
+            raise
+        X_df, y_series, categorical_indicator, attribute_names = dataset.get_data(
+            dataset_format="dataframe", target=dataset.default_target_attribute
+        )
+        categorical_indicator = list(categorical_indicator)
+        columns = []
+        for idx, column_name in enumerate(X_df.columns):
+            series = X_df[column_name]
+            is_categorical = (
+                categorical_indicator[idx]
+                or not pd.api.types.is_numeric_dtype(series)
+            )
+            if is_categorical:
+                categorical_indicator[idx] = True
+                codes, _ = pd.factorize(series, sort=True)
+                values = codes.astype(np.float32)
+                values[codes < 0] = np.nan
+            else:
+                values = pd.to_numeric(
+                    series, errors="coerce"
+                ).to_numpy(dtype=np.float32)
+            columns.append(values)
+        X = np.column_stack(columns).astype(np.float32)
+        y, _ = pd.factorize(pd.Series(y_series), sort=True)
     
 
     if not multiclass:

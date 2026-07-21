@@ -1,7 +1,16 @@
 import argparse
 import os
+import sys
+
+import torch
 
 import pandas as pd
+
+NANOTABPFN_IMPORT_PATH = os.path.join(os.path.dirname(__file__), "nanoTabPFN")
+if NANOTABPFN_IMPORT_PATH not in sys.path:
+    sys.path.insert(0, NANOTABPFN_IMPORT_PATH)
+
+from model import NanoTabPFNModel
 
 from evaluation_helper import EvalHelper
 from tabpfn.scripts import tabular_metrics
@@ -14,18 +23,68 @@ from tabpfn.scripts.transformer_prediction_interface import (
 )
 
 
-DEFAULT_MODELS = ["hydra", "hybrid", "looped_transformer_depth3", "tabpfn"]
+DEFAULT_MODELS = [
+    "hybrid_8l",
+    "tabpfn",
+    "hydra",
+]
 DEFAULT_HYBRID_MODEL = "tabpfn/models_diff/callback_hybrid_6hydra_6transformer_epoch_200.cpkt"
+DEFAULT_HYBRID_8_LAYERS_MODEL = "tabpfn/models_diff/callback_hybrid_8_layers_latest.cpkt"
 DEFAULT_LOOPED_TRANSFORMER_DEPTH3_MODEL = (
     "tabpfn/models_diff/callback_looped_transformer_6physical_core4x3_latest.cpkt"
 )
+DEFAULT_NEW_LOOPED_12_LAYERS_MODEL = (
+    "tabpfn/models_diff/looped_transformer_6physical_core4_mixed_depth_2_3_3_2_12l.cpkt"
+)
 DEFAULT_TABPFN_MODEL = "tabpfn/models_diff/tabpfn_transformer_model.cpkt"
 DEFAULT_HYDRA_MODEL = "tabpfn/models_diff/hydra_small.cpkt"
+DEFAULT_RECENT_HYDRA_25M_MODEL = "tabpfn/models_diff/callback_pure_hydra_12_layers_512e_latest.cpkt"
+DEFAULT_NANOTABPFN_MODEL = "nanoTabPFN/nanotabpfn_trained.pt"
 
 MODEL_SPECS = {
-    "hydra": {
+    "original_hydra": {
         "loader": "hydra_workflow",
         "path_arg": "hydra_model",
+        "prediction_method": "hydra",
+    },
+    "recent_hydra_25m": {
+        "loader": "custom",
+        "path_arg": "recent_hydra_25m_model",
+        "model_type": "hydra",
+        "prediction_method": "hydra",
+    },
+    "original_tabpfn": {
+        "loader": "transformer_workflow",
+        "path_arg": "tabpfn_model",
+        "prediction_method": "transformer",
+    },
+    "hybrid_8_layers": {
+        "loader": "custom",
+        "path_arg": "hybrid_8_layers_model",
+        "model_type": "hybrid",
+        "prediction_method": "transformer",
+    },
+    "hybrid_8l": {
+        "loader": "custom",
+        "path_arg": "hybrid_8_layers_model",
+        "model_type": "hybrid",
+        "prediction_method": "transformer",
+    },
+    "new_looped_12_layers": {
+        "loader": "custom",
+        "path_arg": "new_looped_12_layers_model",
+        "model_type": "looped_transformer",
+        "prediction_method": "transformer",
+    },
+    "nanotabpfn": {
+        "loader": "nanotabpfn",
+        "path_arg": "nanotabpfn_model",
+        "prediction_method": "transformer",
+    },
+    "hydra": {
+        "loader": "custom",
+        "path_arg": "recent_hydra_25m_model",
+        "model_type": "hydra",
         "prediction_method": "hydra",
     },
     "hybrid": {
@@ -76,12 +135,19 @@ def parse_args():
     parser.add_argument("--max-features", type=int, default=100)
     parser.add_argument("--max-time", type=int, default=300)
     parser.add_argument("--hybrid-model", default=DEFAULT_HYBRID_MODEL)
+    parser.add_argument("--hybrid-8-layers-model", default=DEFAULT_HYBRID_8_LAYERS_MODEL)
     parser.add_argument(
         "--looped-transformer-depth3-model",
         default=DEFAULT_LOOPED_TRANSFORMER_DEPTH3_MODEL,
     )
+    parser.add_argument(
+        "--new-looped-12-layers-model",
+        default=DEFAULT_NEW_LOOPED_12_LAYERS_MODEL,
+    )
     parser.add_argument("--tabpfn-model", default=DEFAULT_TABPFN_MODEL)
     parser.add_argument("--hydra-model", default=DEFAULT_HYDRA_MODEL)
+    parser.add_argument("--recent-hydra-25m-model", default=DEFAULT_RECENT_HYDRA_25M_MODEL)
+    parser.add_argument("--nanotabpfn-model", default=DEFAULT_NANOTABPFN_MODEL)
     parser.add_argument("--permutation-bagging", type=int, default=1)
     parser.add_argument("--sample-bagging", type=int, default=0)
     parser.add_argument("--jrt-prompt", action="store_true")
@@ -124,6 +190,30 @@ def parse_args():
     return parser.parse_args()
 
 
+
+class NanoTabPFNEvaluationWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.criterion = None
+
+    def forward(self, src, single_eval_pos):
+        _, eval_xs, eval_ys = src
+        x = eval_xs.transpose(0, 1).contiguous()
+        y = eval_ys[:single_eval_pos].squeeze(-1).transpose(0, 1).contiguous()
+        output = self.model((x, y), train_test_split_index=single_eval_pos)
+        return output.transpose(0, 1).contiguous()
+
+
+def load_nanotabpfn_model(model_path):
+    checkpoint = torch.load(model_path, map_location="cpu")
+    model = NanoTabPFNModel(**checkpoint["model_config"])
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+    config = checkpoint.get("evaluation_config", {})
+    return NanoTabPFNEvaluationWrapper(model), config
+
+
 def print_parameter_count(model_name, model):
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -133,6 +223,12 @@ def print_parameter_count(model_name, model):
 def load_model(model_name, args):
     spec = MODEL_SPECS[model_name]
     model_path = getattr(args, spec["path_arg"])
+
+    if spec["loader"] == "nanotabpfn":
+        model, config = load_nanotabpfn_model(model_path)
+        model.eval()
+        print_parameter_count(model_name, model)
+        return model, config
 
     if spec["loader"] == "custom":
         loaded, config = load_model_only_inference(
@@ -194,14 +290,14 @@ def evaluate_dataset(eval_helper, did, model_name, model, config, args):
     eval_helper.limit_dict = {}
     result = eval_helper.do_evaluation_custom(
         model,
-        bptt=args.bptt,
-        eval_positions=config["eval_positions"],
+        bptt=config.get("bptt", args.bptt),
+        eval_positions=config.get("eval_positions", [config.get("bptt", args.bptt) // 2]),
         metric=METRICS[args.metric],
         device=args.device,
         method_name=prediction_method(model_name),
         evaluation_type=did,
-        max_classes=args.max_classes,
-        max_features=args.max_features,
+        max_classes=config.get("max_num_classes", args.max_classes),
+        max_features=config.get("max_num_features", args.max_features),
         max_time=args.max_time,
         split_numbers=args.splits,
         jrt_prompt=args.jrt_prompt,
@@ -335,9 +431,15 @@ def main():
         .rename_axis("model")
         .reset_index(name="num_dataset_wins")
     )
-    hydra_wins_df = dataset_df[dataset_df["best_model"] == "hydra"].copy()
-    hybrid_wins_df = dataset_df[dataset_df["best_model"] == "hybrid"].copy()
-    non_tabpfn_wins_df = dataset_df[dataset_df["best_model"] != "tabpfn"].copy()
+    hydra_wins_df = dataset_df[
+        dataset_df["best_model"].str.contains("hydra", case=False, na=False)
+    ].copy()
+    hybrid_wins_df = dataset_df[
+        dataset_df["best_model"].str.contains("hybrid", case=False, na=False)
+    ].copy()
+    non_tabpfn_wins_df = dataset_df[
+        ~dataset_df["best_model"].str.contains("tabpfn", case=False, na=False)
+    ].copy()
 
     write_csv(dataset_df, args.result_csv)
     write_csv(split_df, args.split_csv)
