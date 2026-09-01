@@ -123,7 +123,7 @@ class TransformerModel(nn.Module):
                 nn.init.zeros_(attn.out_proj.weight)
                 nn.init.zeros_(attn.out_proj.bias)
 
-    def forward(self, src, src_mask=None, single_eval_pos=None):
+    def forward(self, src, src_mask=None, single_eval_pos=None, **encoder_kwargs):
         assert isinstance(src, tuple), 'inputs (src) have to be given as (x,y) or (style,x,y) tuple'
 
         if len(src) == 2: # (x,y) and no style
@@ -168,7 +168,7 @@ class TransformerModel(nn.Module):
         if self.pos_encoder is not None:
             src = self.pos_encoder(src)
 
-        output = self.transformer_encoder(src, src_mask)
+        output = self.transformer_encoder(src, src_mask, **encoder_kwargs)
 
         output = self.decoder(output)
         return output[single_eval_pos+len(style_src)+(self.global_att_embeddings.num_embeddings if self.global_att_embeddings else 0):]

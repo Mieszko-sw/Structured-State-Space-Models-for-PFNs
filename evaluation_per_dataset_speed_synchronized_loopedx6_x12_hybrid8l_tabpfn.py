@@ -20,60 +20,20 @@ from tabpfn.scripts.transformer_prediction_interface import (
 
 
 MODELS = {
+    "loopedx6": {
+        "path": "tabpfn/models_diff/callback_new_looped_transformer_1physical_core6x_latest.cpkt",
+        "loader_type": "looped_transformer",
+        "method_name": "transformer",
+    },
+    "loopedx12": {
+        "path": "tabpfn/models_diff/callback_new_looped_transformer_1physical_core12x_latest.cpkt",
+        "loader_type": "looped_transformer",
+        "method_name": "transformer",
+    },
     "hybrid_8l": {
         "path": "tabpfn/models_diff/callback_hybrid_8_layers_latest.cpkt",
         "loader_type": "hybrid",
         "method_name": "transformer",
-    },
-    "THx4": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_tabpfn_hydra_x4_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "HHTTTTHH": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_hydra2_tabpfn4_hydra2_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "HTTTTTTH": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_hydra1_tabpfn6_hydra1_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "TTHHHHTT": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_tabpfn2_hydra4_tabpfn2_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "THHHHHHT": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_tabpfn1_hydra6_tabpfn1_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "hydra_16M": {
-        "path": "tabpfn/models_diff/callback_pure_hydra_9_layers_latest.cpkt",
-        "loader_type": "hydra",
-        "method_name": "hydra",
-    },
-    "hydra_small": {
-        "path": "tabpfn/models_diff/hydra_small.cpkt",
-        "loader_type": "hydra_workflow",
-        "method_name": "hydra",
     },
     "tabpfn": {
         "path": "tabpfn/models_diff/tabpfn_transformer_model.cpkt",
@@ -111,29 +71,29 @@ RAW_COLUMNS = [
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Measure synchronized wall-clock inference speed for all trained mixed "
-            "Hydra/TabPFN 8-layer layouts, Hydra 9L (16M), Hydra Small, and TabPFN "
-            "on the real OpenML datasets used by evaluation_script.py."
+            "Measure synchronized wall-clock inference speed for Looped 6x, Looped 12x, "
+            "Hybrid 8L, and TabPFN on the real OpenML datasets used by "
+            "evaluation_script.py."
         )
     )
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--device", default="cuda:2")
     parser.add_argument("--models", nargs="+", default=list(MODELS), choices=list(MODELS))
     parser.add_argument("--dids", nargs="+", type=int, default=None)
     parser.add_argument("--warmup-runs", type=int, default=2)
     parser.add_argument(
         "--timed-runs",
         type=int,
-        default=30,
+        default=15,
         help="Timed repetitions per benchmark split (splits 1-5 match evaluation_script.py).",
     )
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument(
         "--raw-csv",
-        default=os.path.join("result_csvs", "per_dataset_speed_synchronized_raw_15.csv"),
+        default=os.path.join("result_csvs", "per_dataset_speed_synchronized_loopedx6_x12_hybrid8l_tabpfn_raw.csv"),
     )
     parser.add_argument(
         "--summary-csv",
-        default=os.path.join("result_csvs", "per_dataset_speed_synchronized_summary_15.csv"),
+        default=os.path.join("result_csvs", "per_dataset_speed_synchronized_loopedx6_x12_hybrid8l_tabpfn_summary.csv"),
     )
     return parser.parse_args()
 

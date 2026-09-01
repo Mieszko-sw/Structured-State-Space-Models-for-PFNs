@@ -6,6 +6,8 @@
 wandb/*
 */wandb/*
 *.cpkt
+result_csvs/**/*.csv
+result_csvs/**/*.png
 */__pycache__/*
 hybrid_trainings/
 looped_training/
@@ -220,12 +222,13 @@ nanoTabPFN/
 Structured-State-Space-Models-for-PFNs.git/
 work_backup_before_gdn2.tar.gz
 
-# Local repositories and backups
-nanoTabPFN/
-Structured-State-Space-Models-for-PFNs.git/
-work_backup_before_gdn2.tar.gz
-
-# Local repositories and backups
-nanoTabPFN/
-Structured-State-Space-Models-for-PFNs.git/
-work_backup_before_gdn2.tar.gz
+# NanoTabPFN-specific experiments
+*nanotabpfn*
+*NanoTabPFN*
+*nano_hydra_small*
+*training_speed_nano*
+benchmark_training_speed.py
+evaluation_dataset_comparison.py
+plot_dataset_delta_vs_baseline.py
+plot_dataset_score_ci.py
+cripts and experiment results"

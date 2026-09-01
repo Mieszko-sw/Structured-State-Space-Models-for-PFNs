@@ -20,43 +20,52 @@ from tabpfn.scripts.transformer_prediction_interface import (
 
 
 MODEL_PATHS = {
-    "hybrid_12l": "tabpfn/models_diff/callback_hybrid_6hydra_6transformer_epoch_200.cpkt",
-    "alternating_hydra_tabpfn_latest": (
-        "tabpfn/models_diff/callback_alternating_hydra_tabpfn_12_layers_512e_lr0p0001_latest.cpkt"
-    ),
-    "alternating_hydra_tabpfn_epoch_200": (
-        "tabpfn/models_diff/callback_alternating_hydra_tabpfn_12_layers_512e_lr0p0001_epoch_200.cpkt"
-    ),
-    "alternating_hydra_tabpfn_final": (
-        "tabpfn/models_diff/alternating_hydra_tabpfn_12_layers_512e_lr0p0001_12l.cpkt"
-    ),
     "hybrid_8l": "tabpfn/models_diff/callback_hybrid_8_layers_latest.cpkt",
-    "tabpfn": "tabpfn/models_diff/tabpfn_transformer_model.cpkt",
-    "hydra": "tabpfn/models_diff/callback_pure_hydra_12_layers_512e_latest.cpkt",
-    "hydra_22M": "tabpfn/models_diff/callback_pure_hydra_12_layers_512e_latest.cpkt",
+    "THx4": (
+        "tabpfn/models_diff/"
+        "callback_tabpfn_hydra_x4_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
+    ),
+    "HHTTTTHH": (
+        "tabpfn/models_diff/"
+        "callback_hydra2_tabpfn4_hydra2_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
+    ),
+    "HTTTTTTH": (
+        "tabpfn/models_diff/"
+        "callback_hydra1_tabpfn6_hydra1_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
+    ),
+    "TTHHHHTT": (
+        "tabpfn/models_diff/"
+        "callback_tabpfn2_hydra4_tabpfn2_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
+    ),
+    "THHHHHHT": (
+        "tabpfn/models_diff/"
+        "callback_tabpfn1_hydra6_tabpfn1_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
+    ),
+    "hydra_16M": "tabpfn/models_diff/callback_pure_hydra_9_layers_latest.cpkt",
     "hydra_small": "tabpfn/models_diff/hydra_small.cpkt",
+    "tabpfn": "tabpfn/models_diff/tabpfn_transformer_model.cpkt",
 }
 
 MODEL_TYPES = {
-    "hybrid_12l": "hybrid",
-    "alternating_hydra_tabpfn_latest": "hybrid",
-    "alternating_hydra_tabpfn_epoch_200": "hybrid",
-    "alternating_hydra_tabpfn_final": "hybrid",
     "hybrid_8l": "hybrid",
-    "hydra": "hydra",
-    "hydra_22M": "hydra",
+    "THx4": "hybrid",
+    "HHTTTTHH": "hybrid",
+    "HTTTTTTH": "hybrid",
+    "TTHHHHTT": "hybrid",
+    "THHHHHHT": "hybrid",
+    "hydra_16M": "hydra",
 }
 
 PREDICTION_METHODS = {
-    "hybrid_12l": "transformer",
-    "alternating_hydra_tabpfn_latest": "transformer",
-    "alternating_hydra_tabpfn_epoch_200": "transformer",
-    "alternating_hydra_tabpfn_final": "transformer",
     "hybrid_8l": "transformer",
-    "tabpfn": "transformer",
-    "hydra": "hydra",
-    "hydra_22M": "hydra",
+    "THx4": "transformer",
+    "HHTTTTHH": "transformer",
+    "HTTTTTTH": "transformer",
+    "TTHHHHTT": "transformer",
+    "THHHHHHT": "transformer",
+    "hydra_16M": "hydra",
     "hydra_small": "hydra",
+    "tabpfn": "transformer",
 }
 
 METRIC_USED = tabular_metrics.auc_metric
@@ -76,20 +85,15 @@ RAW_COLUMNS = [
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Measure synchronized inference speed for hybrid Hydra-TabPFN, Hydra, "
-            "and TabPFN models."
+            "Measure synchronized inference speed for all trained mixed Hydra/TabPFN "
+            "8-layer layouts, Hydra 9L (16M), Hydra Small, and TabPFN."
         )
     )
-    parser.add_argument("--device", default="cuda:4")
+    parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
         "--models",
         nargs="+",
-        default=[
-            "hybrid_8l",
-            "hydra_22M",
-            "hydra_small",
-            "tabpfn",
-        ],
+        default=list(MODEL_PATHS),
         choices=list(MODEL_PATHS),
     )
     parser.add_argument(

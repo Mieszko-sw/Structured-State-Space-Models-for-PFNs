@@ -1,0 +1,345 @@
+% ---- Colors ----
+\definecolor{hydrablock}{HTML}{1A4B9B}
+\definecolor{transblock}{HTML}{D9A05B}
+\definecolor{ioblock}{HTML}{6B6B6B}
+
+% \begin{tikzpicture}[
+%     node distance=6mm,
+%     block/.style={
+%         rectangle, rounded corners=2pt, draw, minimum width=4.2cm,
+%         minimum height=0.9cm, align=center, font=\small
+%     },
+%     io/.style={block, fill=ioblock!12, draw=ioblock},
+%     hydra/.style={block, fill=hydrablock!15, draw=hydrablock},
+%     trans/.style={block, fill=transblock!18, draw=transblock},
+%     arr/.style={-{Latex[length=2mm]}, thick},
+% ]
+
+% % ---- Input ----
+% \node[io] (in) {Input $(x, y)$ tokens\\ \tiny embedded, $d{=}64$};
+
+% % ---- Stacked-copies illusion behind the pair, to suggest x4 ----
+% \foreach \i in {1,2,3} {
+%     \node[hydra, below=10mm+2*\i*1mm of in, xshift=2*\i*1mm, opacity=0.35] {};
+%     \node[trans, below=20mm+2*\i*1mm of in, xshift=2*\i*1mm, opacity=0.35] {};
+% }
+
+% % ---- Front-most (real) pair ----
+% \node[hydra, below=10mm of in] (hydra1) {\texttt{HydraEncoderLayer}};
+% \node[trans, below=of hydra1] (trans1) {\texttt{TransformerEncoderLayer}};
+
+% % ---- Repeat bracket ----
+% \node[draw, dashed, rounded corners=2pt, fit=(hydra1)(trans1),
+%       inner sep=5mm, label={[font=\bfseries]right:$\times 4$}] (repeatbox) {};
+
+% % ---- Output ----
+% \node[io, below=14mm of repeatbox] (out) {Decoder $\to$ logits};
+
+% % ---- Arrows ----
+% \draw[arr] (in) -- (hydra1);
+% \draw[arr] (hydra1) -- (trans1);
+% \draw[arr] (repeatbox.south) -- (out);
+
+% \end{tikzpicture}
+% \caption{
+% Hybrid architecture: input tokens pass through four alternating
+% \texttt{HydraEncoderLayer}/\texttt{TransformerEncoderLayer} pairs
+% (8 layers total), followed by a decoder producing class logits.
+% }
+
+ 
+%\begin{tikzpicture}[
+%    node distance=6mm,
+ %   block/.style={
+ %       rectangle, rounded corners=2pt, draw, minimum width=4.2cm,
+ %       minimum height=0.75cm, align=center, font=\small
+ %   },
+ %   io/.style={block, fill=ioblock!12, draw=ioblock},
+ %   plaintext/.style={align=center, font=\small},
+ %   composite/.style={
+  %      rectangle split, rectangle split parts=2,
+   %     rectangle split part fill={hydrablock!15, transblock!18},
+   %     draw, rounded corners=2pt, minimum width=4.2cm, minimum height=1.8cm,
+    %    align=center, font=\small
+    %},
+   % arr/.style={-{Latex[length=2mm]}, thick},
+%]
+ 
+% ---- Input ----
+%\node[plaintext] (in) {Input tokens $(X_\text{Train}, Y_\text{Train}, X_\text{Test})$ };
+ %\node[io, below=5mm of in] (embed) {Embedding};
+% ---- Fused composite block (Hydra on top, Transformer on bottom) ----
+%\node[composite, below=7mm of embed] (comp1)
+ %   {\texttt{HydraEncoderLayer} \nodepart{second} \texttt{TransformerEncoderLayer}};
+ 
+% ---- Repeat bracket ----
+%\node[draw, dashed, rounded corners=2pt, fit=(comp1),
+ %     inner sep=3mm, label={[font=\bfseries]right:$\times 4$}] (repeatbox) {};
+ 
+% ---- Output ----
+%\node[io, below=5mm of repeatbox] (decoder) {Decoder};
+%\node[plaintext, below=7mm of decoder] (logits) {Class probabilities $P(Y_\text{Test} \mid X_\text{Train}, Y_\text{Train}, X_\text{Test})$};
+ 
+% ---- Arrows ----
+%\draw[arr] (in) -- (embed);
+%\draw[arr] (embed) -- (comp1);
+%\draw[arr] (repeatbox.south) -- (decoder);
+%\draw[arr] (decoder) -- (logits);
+ 
+%\end{tikzpicture}
+
+
+\resizebox{0.82\linewidth}{!}{%
+\begin{tikzpicture}[
+    font=\small,
+    >=Latex,
+    node distance=4mm,
+    input/.style={
+        align=center,
+        font=\bfseries
+    },
+    encoder/.style={
+        draw=ioblock!70,
+        rounded corners=1.5mm,
+        fill=ioblock!12,
+        minimum height=11mm,
+        text width=42mm,
+        inner sep=2mm,
+        align=center,
+        line width=0.6pt
+    },
+    representation/.style={
+        draw=ioblock!70,
+        rounded corners=1.5mm,
+        fill=ioblock!7,
+        minimum height=20mm,
+        text width=96mm,
+        inner sep=2mm,
+        align=center,
+        line width=0.6pt
+    },
+    hydra/.style={
+        draw=hydrablock,
+        rounded corners=1.5mm,
+        fill=hydrablock!15,
+        minimum height=10mm,
+        text width=70mm,
+        inner sep=2mm,
+        align=center,
+        line width=0.6pt
+    },
+    transformer/.style={
+        draw=transblock,
+        rounded corners=1.5mm,
+        fill=transblock!18,
+        minimum height=10mm,
+        text width=70mm,
+        inner sep=2mm,
+        align=center,
+        line width=0.6pt
+    },
+    prediction/.style={
+        draw=ioblock!70,
+        rounded corners=1.5mm,
+        fill=ioblock!12,
+        minimum height=16mm,
+        text width=70mm,
+        inner sep=2mm,
+        align=center,
+        line width=0.6pt
+    },
+    output/.style={
+        align=center,
+        font=\bfseries
+    },
+    arrow/.style={
+        -{Latex[length=2mm]},
+        line width=0.8pt
+    }
+]
+
+% ================================================================
+% Encoders
+% ================================================================
+
+\node[encoder] (xencoder) {
+    \textbf{Feature encoder} $E_x$\\[1.5mm]
+  %  {\footnotesize
+   %     $\mathbb{R}^{10}\rightarrow\mathbb{R}^{64}$
+   % }
+};
+
+\node[
+    encoder,
+    right=10mm of xencoder
+] (yencoder) {
+    \textbf{Label encoder} $E_y$\\[1.5mm]
+    %{\footnotesize
+    %   $\mathbb{R}\rightarrow\mathbb{R}^{64}$
+    %}
+};
+
+% ================================================================
+% Inputs
+% ================================================================
+
+\node[
+    input,
+    above=7mm of xencoder
+] (features) {
+    \textbf{Feature vectors}\\[2mm]
+    $\left(
+        X_{\mathrm{Train}},
+        X_{\mathrm{Test}}
+    \right)$
+};
+
+\node[
+    input,
+    above=7mm of yencoder
+] (labels) {
+    \textbf{Training labels}\\[2mm]
+    $Y_{\mathrm{Train}}$
+};
+
+\draw[arrow] (features) -- (xencoder);
+\draw[arrow] (labels) -- (yencoder);
+
+% ================================================================
+% Row-level representations
+% ================================================================
+
+\coordinate (encoder-midpoint) at
+    ($(xencoder.south)!0.5!(yencoder.south)$);
+
+\node[
+    representation,
+    below=7mm of encoder-midpoint
+] (representations) {
+    \textbf{Concatenated row sequence}\\[2mm]
+    $\displaystyle
+        \boxed{
+            Z_{\mathrm{Train}}
+            =
+            E_x(X_{\mathrm{Train}})
+            +
+            E_y(Y_{\mathrm{Train}})
+        }
+        \;\Big\Vert\;
+        \boxed{
+            Z_{\mathrm{Test}}
+            =
+            E_x(X_{\mathrm{Test}})
+        }
+    $\\[1.5mm]
+    {\footnotesize
+        $\displaystyle
+            Z
+            =
+            \operatorname{Concat}_{\mathrm{rows}}
+            \!\left(
+                Z_{\mathrm{Train}},
+                Z_{\mathrm{Test}}
+            \right)
+        $
+    }
+};
+
+\draw[arrow]
+    (xencoder.south) --
+    ([xshift=-24mm]representations.north);
+
+\draw[arrow]
+    (yencoder.south) --
+    ([xshift=24mm]representations.north);
+
+% ================================================================
+% Repeated Hydra--Transformer pair
+% ================================================================
+
+\node[
+    hydra,
+    below=8mm of representations
+] (hydra-layer) {
+    \textbf{Hydra layer}\\[0.5mm]
+    {\footnotesize Bidirectional state-space mixing}
+};
+
+\node[
+    transformer,
+    below=0mm of hydra-layer
+] (transformer-layer) {
+    \textbf{Transformer encoder layer}\\[0.5mm]
+    {\footnotesize
+        Multi-head attention and feed-forward network
+    }
+};
+
+\node[
+    draw,
+    dashed,
+    rounded corners=1.5mm,
+    inner sep=3mm,
+    fit=(hydra-layer)(transformer-layer)
+] (hybrid-pair) {};
+
+\node[
+    right=3mm of hybrid-pair,
+    font=\Large
+] (repeat) {
+    $\times 4$
+};
+
+\draw[arrow]
+    (representations.south) --
+    (hybrid-pair.north);
+
+% ================================================================
+% Combined prediction head
+% ================================================================
+
+\node[
+    prediction,
+    below=8mm of hybrid-pair
+] (prediction-head) {
+    \textbf{Prediction head}\\[1mm]
+    {\footnotesize
+        MLP decoder with GELU
+    }\\[0.5mm]
+    {\footnotesize
+        Test-row logits
+        $\rightarrow$
+        softmax
+    }
+};
+
+\draw[arrow]
+    (hybrid-pair.south) --
+    (prediction-head.north);
+
+% ================================================================
+% Output probabilities
+% ================================================================
+
+\node[
+    output,
+    below=6mm of prediction-head
+] (probabilities) {
+    \textbf{Class probabilities}\\[1.5mm]
+    $\displaystyle
+        P\!\left(
+            Y_{\mathrm{Test}}
+            \mid
+            X_{\mathrm{Train}},
+            Y_{\mathrm{Train}},
+            X_{\mathrm{Test}}
+        \right)
+    $
+};
+
+\draw[arrow]
+    (prediction-head.south) --
+    (probabilities.north);
+
+\end{tikzpicture}%
+}

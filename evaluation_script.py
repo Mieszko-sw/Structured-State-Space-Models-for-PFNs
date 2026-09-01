@@ -1,17 +1,11 @@
 import os
-import sys
 
 import torch
 
 import pandas as pd
 from scipy import stats
 
-NANOTABPFN_IMPORT_PATH = os.path.join(os.path.dirname(__file__), "nanoTabPFN")
-if NANOTABPFN_IMPORT_PATH not in sys.path:
-    sys.path.insert(0, NANOTABPFN_IMPORT_PATH)
-
 from evaluation_helper import EvalHelper
-from model import NanoTabPFNModel
 from tabpfn.scripts import tabular_metrics
 from tabpfn.scripts.hydra_prediction_interface import (
     load_model_workflow as hydra_load_model_workflow,
@@ -43,7 +37,6 @@ EVALUATION_METHODS = [
     "original_transformer_12l",
     "transformer",
     "hydra",
-    "nanotabpfn",
 ]
 
 ALTERNATING_MODEL_NAME = "tabpfn/models_diff/callback_alternating_hydra_tabpfn_12_layers_512e_lr0p0001_epoch_200.cpkt"
@@ -66,7 +59,6 @@ HYBRID_8_LAYERS_LATEST_MODEL_NAME = "tabpfn/models_diff/callback_hybrid_8_layers
 ORIGINAL_TRANSFORMER_12L_MODEL_NAME = "tabpfn/models_diff/callback_original_transformer_12l_latest.cpkt"
 TRANSFORMER_MODEL_NAME = "tabpfn/models_diff/tabpfn_transformer_model.cpkt"
 HYDRA_MODEL_NAME = "tabpfn/models_diff/hydra_small.cpkt"
-NANOTABPFN_MODEL_NAME = "nanoTabPFN/nanotabpfn_trained.pt"
 
 METRIC_USED = tabular_metrics.auc_metric
 RESULT_CSV_SAVE_DIR = os.path.join("result_csvs", "alternating_hybrid_eval.csv")
@@ -85,28 +77,6 @@ SAMPLE_BAGGING = 0
 device = "cuda:0"
 
 eval_helper = EvalHelper()
-
-
-class NanoTabPFNEvaluationWrapper(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-        self.criterion = None
-
-    def forward(self, src, single_eval_pos):
-        _, eval_xs, eval_ys = src
-        x = eval_xs.transpose(0, 1).contiguous()
-        y = eval_ys[:single_eval_pos].squeeze(-1).transpose(0, 1).contiguous()
-        output = self.model((x, y), train_test_split_index=single_eval_pos)
-        return output.transpose(0, 1).contiguous()
-
-
-def load_nanotabpfn_model(model_path=NANOTABPFN_MODEL_NAME):
-    checkpoint = torch.load(model_path, map_location="cpu")
-    model = NanoTabPFNModel(**checkpoint["model_config"])
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-    return NanoTabPFNEvaluationWrapper(model), checkpoint.get("evaluation_config", {})
 
 
 def print_parameter_count(model_name, model):
@@ -282,29 +252,6 @@ def evaluate_hydra_model():
     return run_model_evaluation(hydra_model, hydra_config, method_name="hydra")
 
 
-def evaluate_nanotabpfn_model():
-    model, config = load_nanotabpfn_model()
-    print_parameter_count("nanotabpfn", model)
-    return eval_helper.do_evaluation_custom(
-        model,
-        bptt=config.get("bptt", 150),
-        eval_positions=config.get("eval_positions", [75]),
-        metric=METRIC_USED,
-        device=device,
-        method_name="transformer",
-        evaluation_type=EVALUATION_TYPE,
-        max_classes=config.get("max_num_classes", 2),
-        max_features=config.get("max_num_features", 5),
-        split_numbers=SPLIT_NUMBERS,
-        jrt_prompt=JRT_PROMPT,
-        single_evaluation_prompt=SINGLE_EVAL_PROMPT,
-        permutation_bagging=PERMUTATION_BAGGING,
-        sample_bagging=SAMPLE_BAGGING,
-        eval_filters=EVALUATION_TYPE_FILTERS,
-        return_whole_output=True,
-    )
-
-
 def do_evaluation(eval_list):
     result_dict = {}
 
@@ -329,8 +276,6 @@ def do_evaluation(eval_list):
             result_dict[method_name] = evaluate_transformer_model()
         elif method_name == "hydra":
             result_dict[method_name] = evaluate_hydra_model()
-        elif method_name == "nanotabpfn":
-            result_dict[method_name] = evaluate_nanotabpfn_model()
         else:
             raise ValueError(f"Unknown evaluation method: {method_name}")
 

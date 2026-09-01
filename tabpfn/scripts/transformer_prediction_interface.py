@@ -345,6 +345,7 @@ def transformer_predict(model, eval_xs, eval_ys, eval_position,
                         seed=0,
                         no_grad=True,
                         return_logits=False,
+                        num_loops=None,
                         **kwargs):
     """
 
@@ -368,6 +369,7 @@ def transformer_predict(model, eval_xs, eval_ys, eval_position,
     :param N_ensemble_configurations:
     :param average_logits:
     :param normalize_with_sqrt:
+    :param num_loops: Optional recurrent depth for a LoopedTransformerModel.
     :param metric_used:
     :return:
     """
@@ -380,9 +382,11 @@ def transformer_predict(model, eval_xs, eval_ys, eval_position,
         inference_mode_call = torch.inference_mode() if inference_mode and no_grad else NOP()
         with inference_mode_call:
             start = time.time()
+            model_kwargs = {} if num_loops is None else {"num_loops": num_loops}
             output = model(
                     (used_style.repeat(eval_xs.shape[1], 1) if used_style is not None else None, eval_xs, eval_ys.float()),
-                    single_eval_pos=eval_position)[:, :, 0:num_classes]
+                    single_eval_pos=eval_position,
+                    **model_kwargs)[:, :, 0:num_classes]
 
             output = output[:, :, 0:num_classes] / torch.exp(softmax_temperature)
             if not return_logits:

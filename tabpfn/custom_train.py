@@ -274,6 +274,43 @@ def train(priordataloader_class,
         
 
 
+    elastic_shortcut_training = bool(config.get("elastic_shortcut_training", False))
+    elastic_shortcut_min_loops = int(config.get("elastic_shortcut_min_loops", 1))
+    elastic_shortcut_ce_weight = float(config.get("elastic_shortcut_ce_weight", 0.1))
+    elastic_consistency_weight = float(config.get("elastic_consistency_weight", 0.1))
+    elastic_distillation_temperature = float(
+        config.get("elastic_distillation_temperature", 2.0)
+    )
+    if elastic_shortcut_training:
+        if model_type != "looped_transformer":
+            raise ValueError("Elastic shortcut training requires model_type=looped_transformer.")
+        if not isinstance(criterion, nn.CrossEntropyLoss):
+            raise ValueError("Elastic shortcut training currently supports classification only.")
+        if (
+            model.transformer_encoder.core_layers != 1
+            and model.transformer_encoder.core_repeat_pattern is not None
+        ):
+            raise ValueError(
+                "Elastic shared-depth training with multiple physical core layers "
+                "requires looped_core_repeat_pattern=None so num_loops repeats the "
+                "complete core stack."
+            )
+        elastic_max_loops = int(config.get("elastic_max_loops", nlayers))
+        if not 1 <= elastic_shortcut_min_loops < elastic_max_loops:
+            raise ValueError(
+                "Expected 1 <= elastic_shortcut_min_loops < elastic_max_loops."
+            )
+        if elastic_distillation_temperature <= 0:
+            raise ValueError("elastic_distillation_temperature must be positive.")
+        print(
+            "Elastic shortcut training enabled: "
+            f"shortcut loops U[{elastic_shortcut_min_loops}, {elastic_max_loops - 1}], "
+            f"CE weight={elastic_shortcut_ce_weight}, "
+            f"KL weight={elastic_consistency_weight}, "
+            f"temperature={elastic_distillation_temperature}",
+            flush=True,
+        )
+
     model.criterion = criterion
     if load_weights_from_this_state_dict is not None:
         model.load_state_dict(load_weights_from_this_state_dict)
@@ -319,6 +356,10 @@ def train(priordataloader_class,
         total_positional_losses_recorded = 0
         nan_steps = 0
         valid_loss_steps = 0
+        total_full_loss = 0.0
+        total_shortcut_loss = 0.0
+        total_consistency_loss = 0.0
+        total_shortcut_loops = 0.0
         #ignore_steps = 0
         before_get_batch = time.time()
         epoch_start_time = before_get_batch
@@ -357,18 +398,40 @@ def train(priordataloader_class,
 
                     with autocast("cuda", enabled=scaler is not None):
                         # If style is set to None, it should not be transferred to device
-                        output = model(
+                        model_inputs = (
                             tuple(
-                                e.to(device) if torch.is_tensor(e) else e 
+                                e.to(device) if torch.is_tensor(e) else e
                                 for e in data
-                                ) 
-                                if isinstance(data, tuple)
-
-                            else data.to(device), 
-                            single_eval_pos=single_eval_pos)
+                            )
+                            if isinstance(data, tuple)
+                            else data.to(device)
+                        )
+                        output = model(
+                            model_inputs,
+                            single_eval_pos=single_eval_pos,
+                            **({"num_loops": elastic_max_loops} if elastic_shortcut_training else {}),
+                        )
+                        shortcut_loops = None
+                        shortcut_output = None
+                        if elastic_shortcut_training:
+                            shortcut_loops = int(
+                                torch.randint(
+                                    elastic_shortcut_min_loops,
+                                    elastic_max_loops,
+                                    (),
+                                ).item()
+                            )
+                            shortcut_output = model(
+                                model_inputs,
+                                single_eval_pos=single_eval_pos,
+                                num_loops=shortcut_loops,
+                            )
 
                         forward_time = time.time() - before_forward
-                        if not torch.isfinite(output).all().item():
+                        if not torch.isfinite(output).all().item() or (
+                            shortcut_output is not None
+                            and not torch.isfinite(shortcut_output).all().item()
+                        ):
                             print(f"Non-finite model output at epoch {epoch}, batch {batch}. Skipping backward/step.", flush=True)
                             optimizer.zero_grad(set_to_none=True)
                             before_get_batch = time.time()
@@ -393,7 +456,43 @@ def train(priordataloader_class,
                             losses = criterion(output, targets)
                         losses = losses.view(*output.shape[0:2])
                         #time.sleep(10)
-                        loss, nan_share = utils.torch_nanmean(losses.mean(0), return_nanshare=True)
+                        full_loss, nan_share = utils.torch_nanmean(
+                            losses.mean(0), return_nanshare=True
+                        )
+                        shortcut_loss = torch.zeros((), device=output.device)
+                        consistency_loss = torch.zeros((), device=output.device)
+                        loss = full_loss
+                        if elastic_shortcut_training:
+                            shortcut_losses = criterion(
+                                shortcut_output.reshape(-1, n_out),
+                                targets.to(device).long().flatten(),
+                            ).view(*shortcut_output.shape[0:2])
+                            shortcut_loss, shortcut_nan_share = utils.torch_nanmean(
+                                shortcut_losses.mean(0), return_nanshare=True
+                            )
+                            teacher_probs = torch.softmax(
+                                output.detach() / elastic_distillation_temperature, dim=-1
+                            )
+                            student_log_probs = torch.log_softmax(
+                                shortcut_output / elastic_distillation_temperature, dim=-1
+                            )
+                            consistency_losses = nn.functional.kl_div(
+                                student_log_probs,
+                                teacher_probs,
+                                reduction="none",
+                            ).sum(dim=-1) * (elastic_distillation_temperature ** 2)
+                            consistency_loss, consistency_nan_share = utils.torch_nanmean(
+                                consistency_losses.mean(0), return_nanshare=True
+                            )
+                            nan_share = torch.maximum(
+                                nan_share,
+                                torch.maximum(shortcut_nan_share, consistency_nan_share),
+                            )
+                            loss = (
+                                full_loss
+                                + elastic_shortcut_ce_weight * shortcut_loss
+                                + elastic_consistency_weight * consistency_loss
+                            )
                         raw_loss_value = loss.detach()
                         loss = loss / aggregate_k_gradients
 
@@ -438,6 +537,11 @@ def train(priordataloader_class,
                     if torch.isfinite(raw_loss_value).item():
                         total_loss += raw_loss_value.cpu().item()
                         valid_loss_steps += 1
+                        total_full_loss += full_loss.detach().cpu().item()
+                        if elastic_shortcut_training:
+                            total_shortcut_loss += shortcut_loss.detach().cpu().item()
+                            total_consistency_loss += consistency_loss.detach().cpu().item()
+                            total_shortcut_loops += shortcut_loops
                         if single_eval_pos is None:
                             total_positional_losses += losses.mean(1).cpu().detach()
                             total_positional_losses_recorded += torch.ones(bptt)
@@ -462,13 +566,20 @@ def train(priordataloader_class,
                 )
 
         denom = max(valid_loss_steps, 1)
+        elastic_metrics = {
+            "full_ce": total_full_loss / denom,
+            "shortcut_ce": total_shortcut_loss / denom,
+            "consistency_kl": total_consistency_loss / denom,
+            "mean_shortcut_loops": total_shortcut_loops / denom,
+        } if elastic_shortcut_training else {}
         return total_loss / denom, \
                 [], \
                 time_to_get_batch, \
                 forward_time, \
                 step_time, \
                 nan_steps.cpu().item()/(batch+1),\
-                0
+                0, \
+                elastic_metrics
 
     total_loss = float('inf')
     total_positional_losses = float('inf')
@@ -484,7 +595,7 @@ def train(priordataloader_class,
         for epoch in (range(start_epoch + 1, epochs + 1) if epochs is not None else itertools.count(start_epoch + 1)):
 
             epoch_start_time = time.time()
-            total_loss, total_positional_losses, time_to_get_batch, forward_time, step_time, nan_share, ignore_share =\
+            total_loss, total_positional_losses, time_to_get_batch, forward_time, step_time, nan_share, ignore_share, elastic_metrics =\
                 train_epoch(epoch)
             if hasattr(dl, 'validate') and epoch % validation_period == 0:
                 with torch.no_grad():
@@ -510,6 +621,8 @@ def train(priordataloader_class,
             wandb_dict = {}
             wandb_dict[f"train/{model_type}_loss"] = total_loss
             wandb_dict["extras/nan_share"] = nan_share
+            for metric_name, metric_value in elastic_metrics.items():
+                wandb_dict[f"train/{model_type}_elastic_{metric_name}"] = metric_value
             
 
             # Do other evaluations as well.

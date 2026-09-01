@@ -2,6 +2,7 @@ import argparse
 import os
 import random
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -9,75 +10,19 @@ import torch
 
 from evaluation_helper import EvalHelper
 from tabpfn.scripts import tabular_metrics
-from tabpfn.scripts.hydra_prediction_interface import (
-    load_model_workflow as hydra_load_model_workflow,
-)
 from tabpfn.scripts.model_builder_custom import load_model_only_inference
 from tabpfn.scripts.tabular_evaluation import evaluate
-from tabpfn.scripts.transformer_prediction_interface import (
-    load_model_workflow as transformer_load_model_workflow,
-)
 
 
 MODELS = {
-    "hybrid_8l": {
-        "path": "tabpfn/models_diff/callback_hybrid_8_layers_latest.cpkt",
-        "loader_type": "hybrid",
+    "loopedx6": {
+        "path": "tabpfn/models_diff/callback_new_looped_transformer_1physical_core6x_latest.cpkt",
+        "loader_type": "looped_transformer",
         "method_name": "transformer",
     },
-    "THx4": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_tabpfn_hydra_x4_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "HHTTTTHH": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_hydra2_tabpfn4_hydra2_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "HTTTTTTH": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_hydra1_tabpfn6_hydra1_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "TTHHHHTT": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_tabpfn2_hydra4_tabpfn2_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "THHHHHHT": {
-        "path": (
-            "tabpfn/models_diff/"
-            "callback_tabpfn1_hydra6_tabpfn1_hybrid_8_layers_512e_lr0p0001_latest.cpkt"
-        ),
-        "loader_type": "hybrid",
-        "method_name": "transformer",
-    },
-    "hydra_16M": {
-        "path": "tabpfn/models_diff/callback_pure_hydra_9_layers_latest.cpkt",
-        "loader_type": "hydra",
-        "method_name": "hydra",
-    },
-    "hydra_small": {
-        "path": "tabpfn/models_diff/hydra_small.cpkt",
-        "loader_type": "hydra_workflow",
-        "method_name": "hydra",
-    },
-    "tabpfn": {
-        "path": "tabpfn/models_diff/tabpfn_transformer_model.cpkt",
-        "loader_type": "tabpfn",
+    "loopedx12": {
+        "path": "tabpfn/models_diff/callback_new_looped_transformer_1physical_core12x_latest.cpkt",
+        "loader_type": "looped_transformer",
         "method_name": "transformer",
     },
 }
@@ -88,7 +33,29 @@ EVALUATION_TYPE_FILTERS = {
     "multiclass": True,
 }
 METRIC_USED = tabular_metrics.auc_metric
-BPTT = 1024
+BPTT = 32768
+EVAL_POSITION = BPTT // 2
+# TabArena-v0.1 classification datasets with N * d > 200,000 and d <= 100,
+# using the full-dataset sample (N) and feature (d) counts from Table B.2 of
+# the TabArena paper.
+DEFAULT_DIDS = [
+    46950,  # polish_companies_bankruptcy: 5,910 * 65
+    46962,  # taiwanese_bankruptcy_prediction: 6,819 * 95
+    46969,  # NATICUSdroid: 7,491 * 87
+    46916,  # coil2000_insurance_policies: 9,822 * 86
+    46932,  # heloc: 10,459 * 24
+    46979,  # jm1: 10,885 * 22
+    46947,  # online_shoppers_intention: 12,330 * 18
+    46937,  # in_vehicle_coupon_recommendation: 12,684 * 25
+    46935,  # HR_Analytics_Job_Change_of_Data_Scientists: 19,158 * 13
+    46919,  # credit_card_clients_default: 30,000 * 24
+    46905,  # Amazon_employee_access: 32,769 * 10
+    46910,  # bank-marketing: 45,211 * 14
+    46922,  # Diabetes130US: 71,518 * 48
+    46955,  # SDSS17: 78,053 * 12
+    46920,  # customer_satisfaction_in_airline: 129,880 * 22
+    46929,  # GiveMeSomeCredit: 150,000 * 11
+]
 SPLIT_NUMBERS = [1, 2, 3, 4, 5]
 RAW_COLUMNS = [
     "did",
@@ -111,29 +78,30 @@ RAW_COLUMNS = [
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Measure synchronized wall-clock inference speed for all trained mixed "
-            "Hydra/TabPFN 8-layer layouts, Hydra 9L (16M), Hydra Small, and TabPFN "
-            "on the real OpenML datasets used by evaluation_script.py."
+            "Measure synchronized wall-clock inference speed for one physical "
+            "Transformer block looped 6 or 12 times at 32k context length on "
+            "TabArena-v0.1 classification datasets "
+            "with N * d > 200,000 and at most 100 features."
         )
     )
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--device", default="cuda:1")
     parser.add_argument("--models", nargs="+", default=list(MODELS), choices=list(MODELS))
     parser.add_argument("--dids", nargs="+", type=int, default=None)
     parser.add_argument("--warmup-runs", type=int, default=2)
     parser.add_argument(
         "--timed-runs",
         type=int,
-        default=30,
+        default=15,
         help="Timed repetitions per benchmark split (splits 1-5 match evaluation_script.py).",
     )
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument(
         "--raw-csv",
-        default=os.path.join("result_csvs", "per_dataset_speed_synchronized_raw_15.csv"),
+        default=os.path.join("result_csvs", "per_dataset_speed_synchronized_long_context_loopedx6_x12_raw_tabarena_16.csv"),
     )
     parser.add_argument(
         "--summary-csv",
-        default=os.path.join("result_csvs", "per_dataset_speed_synchronized_summary_15.csv"),
+        default=os.path.join("result_csvs", "per_dataset_speed_synchronized_long_context_loopedx6_x12_summary_tabarena_16.csv"),
     )
     return parser.parse_args()
 
@@ -186,40 +154,27 @@ def real_eval_position(dataset_list, configured_eval_position):
 
 def load_model(model_name, device):
     info = MODELS[model_name]
-    if info["loader_type"] == "tabpfn":
-        loaded, config, _ = transformer_load_model_workflow(
-            2,
-            -1,
-            add_name="",
-            base_path="",
-            device=device,
-            eval_addition="",
-            only_inference=True,
-            model_path_custom=info["path"],
+    checkpoint = Path(info["path"])
+    if not checkpoint.is_file():
+        raise FileNotFoundError(
+            f"Checkpoint for {model_name} does not exist: {checkpoint}"
         )
-    elif info["loader_type"] == "hydra_workflow":
-        loaded, config, _ = hydra_load_model_workflow(
-            2,
-            -1,
-            add_name="",
-            base_path="",
-            device=device,
-            eval_addition="",
-            only_inference=True,
-            model_path_custom=info["path"],
-        )
-    else:
-        loaded, config = load_model_only_inference(
-            ".",
-            info["path"],
-            device,
-            model_name=info["loader_type"],
-        )
+    loaded, config = load_model_only_inference(
+        ".",
+        str(checkpoint),
+        device,
+        model_name=info["loader_type"],
+    )
 
     model = loaded[2]
     model.eval()
     params = sum(p.numel() for p in model.parameters())
-    print(f"{model_name}: {params:,} parameters from {info['path']}", flush=True)
+    print(f"{model_name}: {params:,} parameters from {checkpoint}", flush=True)
+    print(
+        f"  nlayers={config.get('nlayers')} "
+        f"loop_pattern={config.get('looped_core_repeat_pattern')}",
+        flush=True,
+    )
     return model, config
 
 
@@ -238,10 +193,9 @@ def prepare_datasets(dids):
 def run_single_measurement(model, model_name, config, dataset_list, device, split_number):
     dataset = dataset_list[0]
     dataset_name = dataset[0]
-    eval_positions = config["eval_positions"]
-    if len(eval_positions) != 1:
-        raise ValueError(f"Expected one evaluation position, got {eval_positions}")
-    configured_eval_position = eval_positions[0]
+    # Use a half-context split instead of the checkpoint training position (usually 972).
+    configured_eval_position = EVAL_POSITION
+    eval_positions = [configured_eval_position]
     effective_eval_position = real_eval_position(dataset_list, configured_eval_position)
 
     synchronize(device)
@@ -481,8 +435,7 @@ def main():
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    eval_helper = EvalHelper()
-    dids = args.dids if args.dids is not None else eval_helper.openml_cc18_dids_small
+    dids = args.dids if args.dids is not None else DEFAULT_DIDS
     datasets = prepare_datasets(dids)
     models = {model_name: load_model(model_name, args.device) for model_name in args.models}
 

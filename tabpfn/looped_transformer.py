@@ -62,6 +62,7 @@ class LoopedTransformerEncoder(Module):
         src: Tensor,
         mask: Optional[Tensor] = None,
         src_key_padding_mask: Optional[Tensor] = None,
+        num_loops: Optional[int] = None,
     ) -> Tensor:
         output = src
 
@@ -72,12 +73,26 @@ class LoopedTransformerEncoder(Module):
             output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
 
         core = self.layers[warmup_end:core_end]
+        if num_loops is not None:
+            num_loops = int(num_loops)
+            if num_loops <= 0:
+                raise ValueError("num_loops must be positive.")
+
         if self.core_repeat_pattern is None:
-            for _ in range(self.core_repeats):
+            repeats = self.core_repeats if num_loops is None else num_loops
+            for _ in range(repeats):
                 for mod in core:
                     output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
         else:
-            for mod, repeats in zip(core, self.core_repeat_pattern):
+            if num_loops is not None and self.core_layers != 1:
+                raise ValueError(
+                    "num_loops can only override core_repeat_pattern when there is "
+                    "one physical core layer."
+                )
+            repeat_pattern = (
+                self.core_repeat_pattern if num_loops is None else (num_loops,)
+            )
+            for mod, repeats in zip(core, repeat_pattern):
                 for _ in range(repeats):
                     output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
 

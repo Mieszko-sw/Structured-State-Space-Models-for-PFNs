@@ -1,6 +1,0 @@
-model,display_name,checkpoint,run,status,error,device,parameters,seq_len,num_features,num_classes,batch_size,eval_position,train_tokens,test_tokens,loss,step_seconds,examples_per_second,tokens_per_second
-nanotabpfn,NanoTabPFN,nanoTabPFN/nanotabpfn_trained.pt,1,ok,,cuda:0,356066,150,5,2,32,75,2400,2400,0.7098948955535889,0.03336033644154668,959.2229399745344,143883.44099618014
-nanotabpfn,NanoTabPFN,nanoTabPFN/nanotabpfn_trained.pt,2,ok,,cuda:0,356066,150,5,2,32,75,2400,2400,0.7076426148414612,0.03321523126214743,963.413433657699,144512.01504865484
-nanotabpfn,NanoTabPFN,nanoTabPFN/nanotabpfn_trained.pt,3,ok,,cuda:0,356066,150,5,2,32,75,2400,2400,0.7058861255645752,0.02703711809590459,1183.5580954483148,177533.7143172472
-nanotabpfn,NanoTabPFN,nanoTabPFN/nanotabpfn_trained.pt,4,ok,,cuda:0,356066,150,5,2,32,75,2400,2400,0.7044222950935364,0.027635882142931223,1157.914910568,173687.23658520004
-nanotabpfn,NanoTabPFN,nanoTabPFN/nanotabpfn_trained.pt,5,ok,,cuda:0,356066,150,5,2,32,75,2400,2400,0.7031258940696716,0.027663585264235735,1156.7553407970768,173513.3011195615
